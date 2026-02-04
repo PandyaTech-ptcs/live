@@ -1,0 +1,8 @@
+[dotenv@17.2.3] injecting env (7) from .env -- tip: ✅ audit secrets and track compliance: https://dotenvx.com/ops
+
+--- Somnath Aarti Server (PostgreSQL) ---
+Local: http://localhost:3000
+PostgreSQL Connection has been established successfully.
+Network: http://192.168.0.137:3000
+[4:16:21 PM] 🔄 Running Automatic Live Check for all temples...
+[4:26:16 PM] 🔄 Running Automatic Live Check for all temples...

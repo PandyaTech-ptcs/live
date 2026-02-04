@@ -7,7 +7,15 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
     "express": "^4.18.2",
-    "cors": "^2.8.5"
+    "nodemailer": "^8.0.0",
+    "openai": "^6.17.0",
+    "pg": "^8.17.2",
+    "pg-hstore": "^2.3.4",
+    "sequelize": "^6.37.7",
+    "twilio": "^5.12.0"
   }
 }

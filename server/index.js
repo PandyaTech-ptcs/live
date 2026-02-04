@@ -1,5 +1,11 @@
 const express = require('express');
 const cors = require('cors');
+const { Sequelize, DataTypes, Op } = require('sequelize');
+const https = require('https');
+require('dotenv').config();
+const twilio = require('twilio');
+const nodemailer = require('nodemailer');
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -12,567 +18,1476 @@ app.use((req, res, next) => {
     next();
 });
 
-// Data for all Temples grouped by State
-const TEMPLE_DATA = [
+// --- PostgreSQL Database Connection ---
+const sequelize = new Sequelize(
+    process.env.DB_NAME || 'temple_db',
+    process.env.DB_USER || 'postgres',
+    process.env.DB_PASSWORD || 'your_password_here',
     {
-        state: "ગુજરાત",
-        temples: [
-            { 
-                name: "દ્વારકાધીશ મંદિર – દ્વારકા", 
-                description: "Dwarkadhish Temple", 
-                liveVideoId: "jEYlt46IXfs", 
-                location: "Dwarka, Gujarat", 
-                liveChannelUrl: "https://www.youtube.com/@shridwarkadhishmandirofficial/live",
-                socialLinks: {
-                    facebook: "https://www.facebook.com/shridwarkadhishmandirofficial/",
-                    instagram: "https://www.instagram.com/shridwarkadhishmandirofficial/"
-                },
-                history: "દ્વારકાધીશ મંદિર, જેને જગત મંદિર તરીકે પણ ઓળખવામાં આવે છે, તે ભગવાન કૃષ્ણને સમર્પિત ચાલુક્ય શૈલીનું હિન્દુ મંદિર છે. 5 માળની ઇમારતનું મુખ્ય મંદિર, જે 72 સ્તંભો દ્વારા સપોર્ટેડ છે, તેને જગત મંદિર અથવા નિજા મંદિર તરીકે ઓળખવામાં આવે છે. પુરાતત્વીય તારણો સૂચવે છે કે મૂળ મંદિર કૃષ્ણના પૌત્ર વજ્રનાભ દ્વારા 2,500 વર્ષ પહેલાં હરિ-ગૃહ (ભગવાન કૃષ્ણનું નિવાસસ્થાન) પર બાંધવામાં આવ્યું હતું. તે ચાર ધામ યાત્રાધામોમાંનું એક છે.",
-                history_en: "The Dwarkadhish temple, also known as the Jagat Mandir, is a Chalukya styled Hindu temple dedicated to Lord Krishna. The main shrine of the five-storied building, supported by 72 pillars, is known as Jagat Mandir or Nija Mandir. Archaeological findings suggest the original temple was built by Krishna's grandson, Vajranabha, over the Hari-Griha (Lord Krishna's residential place) 2,500 years ago. It is one of the Char Dham pilgrimage sites.",
-                history_hi: "द्वारकाधीश मंदिर, जिसे जगत मंदिर भी कहा जाता है, भगवान कृष्ण को समर्पित चालुक्य शैली का हिंदू मंदिर है। 5 मंजिला इमारत का मुख्य मंदिर, जो 72 खंभों पर टिका है, जगत मंदिर या निज मंदिर कहलाता है। पुरातात्विक निष्कर्ष बताते हैं कि मूल मंदिर कृष्ण के पोते वज्रनाभ द्वारा 2,500 साल पहले हरि-गृह (भगवान कृष्ण का निवास स्थान) पर बनाया गया था। यह चार धाम तीर्थस्थलों में से एक है।"
-            },
-            { 
-                name: "સોમનાથ મહાદેવ – સોમનાથ", 
-                description: "Somnath Jyotirlinga", 
-                liveVideoId: "-2yFWlIB1Zs", 
-                location: "Veraval, Gujarat", 
-                liveChannelUrl: "https://www.youtube.com/@SomnathTempleOfficialChannel/streams",
-                socialLinks: {
-                    facebook: "https://www.facebook.com/SomnathTempleOfficial/",
-                    instagram: "https://www.instagram.com/somnathtempleofficial/"
-                },
-                keywords: ["Darshan", "Aarti", "Pooja", "Mahapooja"],
-                history: "સોમનાથ ભગવાન શિવના 12 જ્યોતિર્લિંગોમાંનું પ્રથમ છે. આ મંદિર પ્રભાસ પાટણમાં આવેલું છે. દંતકથા કહે છે કે ચંદ્રદેવ (સોમ) એ સોનામાં, રાવણે ચાંદીમાં અને શ્રીકૃષ્ણે સુખડમાં આ મંદિર બનાવ્યું હતું. વર્તમાન માળખું, જે ચાલુક્ય શૈલીમાં બાંધવામાં આવ્યું છે, તે સદીઓથી આક્રમણકારો દ્વારા વારંવાર નાશ પામ્યા પછી 1951 માં સરદાર વલ્લભભાઈ પટેલ દ્વારા પુનર્નિર્મિત કરવામાં આવ્યું હતું. તે શાશ્વત શ્રદ્ધાના પ્રતીક તરીકે ઊભું છે.",
-                history_en: "Somnath is the first of the 12 Jyotirlingas of Lord Shiva. The temple is located at Prabhas Patan. Legend says the Moon God (Soma) built the temple in gold, Ravana in silver, and Krishna in sandalwood. The current structure, built in the Chalukya style, was reconstructed by Sardar Vallabhbhai Patel in 1951 after repeated destructions by invaders over centuries. It stands as a symbol of eternal faith.",
-                history_hi: "सोमनाथ भगवान शिव के 12 ज्योतिर्लिंगों में सबसे प्रथम है। यह मंदिर प्रभास पाटन में स्थित है। किंवदंती है कि चंद्रदेव (सोम) ने सोने में, रावण ने चांदी में और श्री कृष्ण ने चंदन की लकड़ी में इस मंदिर का निर्माण किया था। वर्तमान संरचना, जिसे चालुक्य शैली में बनाया गया है, 1951 में सरदार वल्लभभाई पटेल द्वारा आक्रमणकारियों द्वारा बार-बार नष्ट किए जाने के बाद पुनर्निर्मित की गई थी। यह शाश्वत विश्वास के प्रतीक के रूप में खड़ा है।"
-            },
-            { 
-                name: "રણછોડરાયજી – ડાકોર", 
-                description: "Ranchhodraiji Temple", 
-                liveVideoId: "53JgXelmHsg", 
-                location: "Dakor, Gujarat", 
-                liveChannelUrl: "https://www.youtube.com/c/RanchhodraijiLiveDarshanDakor/live",
-                socialLinks: {
-                    facebook: "https://www.facebook.com/RanchhodraijiLiveDarshanDakor/",
-                    instagram: "https://www.instagram.com/ranchhodraiji_dakor/"
-                },
-                history: "રણછોડરાયજીનું મુખ્ય મંદિર 1772 એ.ડી.માં શ્રી ગોપાલરાવ જગન્નાથ તાંબેકર દ્વારા બાંધવામાં આવ્યું હતું. દંતકથા છે કે બોડાણા નામનો ભક્ત, જે દર વર્ષે ડાકોરથી દ્વારકા ચાલીને જતો હતો, તે તેની વૃદ્ધાવસ્થામાં ભગવાન કૃષ્ણ (રણછોડરાયજી) ની મૂર્તિ ડાકોર લાવ્યો કારણ કે ભગવાન તેની ભક્તિથી પ્રસન્ન થયા હતા અને તેની સાથે આવવા રાજી થયા હતા.",
-                history_en: "The main temple of Ranchhodraiji was built by Shri Gopalrao Jagannath Tambwekar in 1772 A.D. Legend says that a devotee named Bodana, who used to walk from Dakor to Dwarka every year, brought the idol of Lord Krishna (Ranchhodraiji) to Dakor in his old age because the Lord was pleased with his devotion and agreed to come with him.",
-                history_hi: "रणछोड़रायजी का मुख्य मंदिर 1772 ई. में श्री गोपालराव जगन्नाथ तांबेकर द्वारा बनवाया गया था। किंवदंती है कि बोडाणा नामक भक्त, जो हर साल डाकोर से द्वारका पैदल जाता था, अपनी वृद्धावस्था में भगवान कृष्ण (रणछोड़रायजी) की मूर्ति को डाकोर ले आया क्योंकि भगवान उसकी भक्ति से प्रसन्न थे और उसके साथ आने के लिए सहमत हुए थे।"
-            },
-            { 
-                name: "નાગેશ્વર મહાદેવ – દ્વારકા", 
-                description: "Nageshwar Jyotirlinga", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Dwarka, Gujarat",
-                history: "નાગેશ્વર જ્યોતિર્લિંગ 12 જ્યોતિર્લિંગોમાંનું એક છે. શિવપુરાણમાં તેનો ઉલ્લેખ છે. રાક્ષસ દારુકાએ સુપ્રિયા નામના ભક્તને અહીં કેદ કરી હતી. ભગવાન શિવ રાક્ષસને પરાજિત કરવા અને તેમના ભક્તનું રક્ષણ કરવા માટે પ્રગટ થયા હતા. મંદિરમાં ભગવાન શિવની 25 મીટર ઊંચી વિશાળ પ્રતિમા છે.",
-                history_en: "Nageshwar Jyotirlinga is one of the 12 Jyotirlingas. It is mentioned in the Shiva Purana. The demon Daruka imprisoned a devotee named Supriya here. Lord Shiva appeared to defeat the demon and protect his devotee. The temple features a giant 25-meter tall statue of Lord Shiva.",
-                history_hi: "नागेश्वर ज्योतिर्लिंग 12 ज्योतिर्लिंगों में से एक है। शिव पुराण में इसका उल्लेख है। राक्षस दारुका ने सुप्रिया नामक भक्त को यहाँ कैद किया था। भगवान शिव राक्षस को हराने और अपने भक्त की रक्षा करने के लिए प्रकट हुए थे। मंदिर में भगवान शिव की 25 मीटर ऊंची विशाल प्रतिमा है।"
-            },
-            { 
-                name: "સ્વામિનારાયણ મંદિર – વડતાલ", 
-                description: "Swaminarayan Temple Vadtal", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Vadtal, Gujarat", 
-                liveChannelUrl: "https://www.youtube.com/user/TheSwaminarayangadi/live",
-                history: "વડતાલ સ્વામિનારાયણ મંદિર એસ.જી. બ્રહ્માનંદ સ્વામીની દેખરેખ હેઠળ બનાવવામાં આવ્યું હતું. ભગવાન સ્વામિનારાયણે પોતે 1824 માં અહીં લક્ષ્મીનારાયણ દેવની મૂર્તિઓ સ્થાપિત કરી હતી. તે શ્રી લક્ષ્મીનારાયણ દેવ ગાદીનું મુખ્યડું છે.",
-                history_en: "The Vadtal Swaminarayan Temple was built under the supervision of S.G. Brahmanand Swami. Lord Swaminarayan Himself installed the idols of Laxminarayan Dev here in 1824. It is the headquarters of the Shri Laxminarayan Dev Gadi.",
-                history_hi: "वड़ताल स्वामीनारायण मंदिर एस.जी. ब्रह्मानन्द स्वामी की देखरेख में बनाया गया था। भगवान स्वामीनारायण ने स्वयं 1824 में यहाँ लक्ष्मीनारायण देव की मूर्तियाँ स्थापित की थीं। यह श्री लक्ष्मीनारायण देव गादी का मुख्यालय है।"
-            },
-            { 
-                name: "સ્વામિનારાયણ મંદિર – કાલુપુર", 
-                description: "Kalupur Swaminarayan Mandir", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Ahmedabad, Gujarat", 
-                liveChannelUrl: "https://www.youtube.com/@KalupurMandir/live",
-                history: "આ સ્વામિનારાયણ સંપ્રદાયનું પ્રથમ મંદિર છે, જે 1822 માં બ્રિટિશ સરકાર દ્વારા આપવામાં આવેલી જમીન પર બનાવવામાં આવ્યું હતું. ભગવાન સ્વામિનારાયણે અહીં નરનારાયણ દેવની મૂર્તિઓ સ્થાપિત કરી હતી. તે જટિલ લાકડાની કોતરણી અને સ્થાપત્યનો શ્રેષ્ઠ નમૂનો છે.",
-                history_en: "This is the first temple of the Swaminarayan Sampraday, built in 1822 on land given by the British government. Lord Swaminarayan installed the idols of NarNarayan Dev here. It is a masterpiece of intricate wood carving and architecture.",
-                history_hi: "यह स्वामीनारायण संप्रदाय का पहला मंदिर है, जिसे 1822 में ब्रिटिश सरकार द्वारा दी गई भूमि पर बनाया गया था। भगवान स्वामीनारायण ने यहाँ नरनारायण देव की मूर्तियाँ स्थापित की थीं। यह जटिल लकड़ी की नक्काशी और वास्तुकला का एक उत्कृष्ट नमूना है।"
-            },
-            { 
-                name: "ISKCON – અમદાવાદ", 
-                description: "ISKCON Ahmedabad", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Ahmedabad, Gujarat", 
-                liveChannelUrl: "https://www.youtube.com/@ISKCONAhmedabad/live",
-                history: "ઇસ્કોન અમદાવાદ, જે હરે કૃષ્ણ મંદિર તરીકે ઓળખાય છે, તે રાધા અને ગોવિંદને સમર્પિત છે. તે આધ્યાત્મિક શિક્ષણ અને વૈદિક સંસ્કૃતિનું કેન્દ્ર છે, જે ભગવદ ગીતા અને શ્રીમદ ભાગવતરામમાં પ્રસ્તુત ભગવાન કૃષ્ણના ઉપદેશોનો પ્રચાર કરે છે.",
-                history_en: "ISKCON Ahmedabad, known as the Hare Krishna Temple, is dedicated to Radha and Govind. It is a center for spiritual learning and Vedic culture, promoting the teachings of Lord Krishna as presented in the Bhagavad Gita and Srimad Bhagavatam.",
-                history_hi: "इस्कॉन अहमदाबाद, जिसे हरे कृष्ण मंदिर के रूप में जाना जाता है, राधा और गोविंद को समर्पित है। यह आध्यात्मिक शिक्षा और वैदिक संस्कृति का केंद्र है, जो भगवद् गीता और श्रीमद् भागवतम में प्रस्तुत भगवान कृष्ण की शिक्षाओं का प्रचार करता है।"
-            },
-            { 
-                name: "ISKCON – રાજકોટ", 
-                description: "ISKCON Rajkot", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Rajkot, Gujarat",
-                history: "ઇસ્કોન રાજકોટ (શ્રી શ્રી રાધા નીલમાધવ ધામ) એ રાજકોટમાં આધ્યાત્મિક ઓએસિસ તરીકે સેવા આપતું એક સુંદર મંદિર સંકુલ છે. તે જન્માષ્ટમી અને રથયાત્રા જેવા ભવ્ય તહેવારોનું આયોજન કરે છે.",
-                history_en: "ISKCON Rajkot (Sri Sri Radha Neelmadhav Dham) is a beautiful temple complex serving as a spiritual oasis in Rajkot. It hosts grand festivals like Janmashtami and Ratha Yatra.",
-                history_hi: "इस्कॉन राजकोट (श्री श्री राधा नीलमाधव धाम) राजकोट में एक आध्यात्मिक नखलिस्तान के रूप में सेवा करने वाला एक सुंदर मंदिर परिसर है। यह जन्माष्टमी और रथ यात्रा जैसे भव्य त्योहारों का आयोजन करता है।"
-            },
-            { 
-                name: "ખોડિયાર મંદિર - ભાવનગર રાજપરા", 
-                description: "Khodiyar Maa Rajpara", 
-                liveVideoId: "DWjV3Xm565g", 
-                location: "Bhavnagar, Gujarat",
-                history: "આ મંદિર તાંતણીયા ધરા પાસે આવેલું છે. ખોડિયાર મા (જાનબાઈ) નો જન્મ ભગવાન શિવના આશીર્વાદથી મામડ જી ચારણના ઘરે 7 બહેનો અને 1 ભાઈમાંના એક તરીકે થયો હતો. રાજપરાનું મંદિર મહત્વનું છે કારણ કે દેવી જુનાગઢના શાસક રા'નવઘણને મદદ કરવા માટે અહીં પ્રગટ થયા હોવાનું માનવામાં આવે છે. 'મગર' તેમનું વાહન છે.",
-                history_en: "This temple is situated near Tataniya Dhara. Khodiyar Maa (Janbai) was born as one of 7 sisters and 1 brother to Mamad Ji Charan with the blessings of Lord Shiva. The temple at Rajpara is significant as the Goddess is believed to have appeared here to help Ra'Navghan, the ruler of Junagadh. The 'Magar' (Crocodile) is her vehicle.",
-                history_hi: "यह मंदिर तांतणिया धरा के पास स्थित है। खोड़ियार मां (जानबाई) का जन्म भगवान शिव के आशीर्वाद से मामड जी चारण के घर 7 बहनों और 1 भाई में से एक के रूप में हुआ था। राजपरा का मंदिर महत्वपूर्ण है क्योंकि माना जाता है कि देवी जूनागढ़ के शासक रा'नवघण की मदद करने के लिए यहाँ प्रकट हुई थीं। 'मगरमच्छ' उनका वाहन है।"
-            }
-        ]
-    },
-    {
-        state: "મહારાષ્ટ્ર",
-        temples: [
-            { 
-                name: "સિદ્ધિવિનાયક ગણપતિ – મુંબઈ", 
-                description: "Siddhivinayak Temple", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Mumbai, Maharashtra", 
-                liveChannelUrl: "https://www.youtube.com/channel/UCaEtfv3IzW_1vMWo2ftboMw/live",
-                history: "સિદ્ધિવિનાયક મંદિર મૂળરૂપે 1801 માં લક્ષ્મણ વિથુ અને દેઉબાઈ પાટીલ દ્વારા બનાવવામાં આવ્યું હતું. અહીં ગણેશજીની મૂર્તિની સૂંઢ જમણી બાજુ છે. તે મુંબઈના સૌથી ધનિક અને સૌથી વધુ મુલાકાત લેવાતા મંદિરોમાંનું એક માનવામાં આવે છે.",
-                history_en: "The Siddhivinayak Temple was originally built in 1801 by Laxman Vithu and Deubai Patil. The idol of Ganesha here has its trunk titled to the right. It is considered one of the richest and most visited temples in Mumbai.",
-                history_hi: "सिद्धिविनायक मंदिर मूल रूप से 1801 में लक्ष्मण विथु और देउबाई पाटिल द्वारा बनाया गया था। यहाँ गणेश जी की मूर्ति की सूंड दाईं ओर है। इसे मुंबई के सबसे अमीर और सबसे अधिक देखे जाने वाले मंदिरों में से एक माना जाता है।"
-            },
-            { 
-                name: "દગડુશેઠ ગણપતિ – પુણે", 
-                description: "Dagdusheth Halwai Ganpati", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Pune, Maharashtra", 
-                liveChannelUrl: "https://www.youtube.com/@DagdushethGanpatiOfficial/live",
-                history: "પ્લેગમાં પુત્ર ગુમાવ્યા બાદ મીઠાઈ વેચનાર દગડુશેઠ હલવાઈ દ્વારા નિર્મિત. અહીંની ગણેશ પ્રતિમા ખૂબ જ પ્રખ્યાત છે અને પૂણેમાં ગણેશોત્સવ દરમિયાન મંદિર ઉજવણીનું મુખ્ય કેન્દ્ર હોય છે.",
-                history_en: "Built by Dagdusheth Halwai, a sweetmeat seller, after he lost his son to plague. The Ganesh idol here is very famous and the temple is a major center of celebration during Ganeshotsav in Pune.",
-                history_hi: "प्लेग में अपना बेटा खोने के बाद मिठाई विक्रेता दगडूशेठ हलवाई द्वारा निर्मित। यहाँ की गणेश प्रतिमा बहुत प्रसिद्ध है और पुणे में गणेशोत्सव के दौरान मंदिर उत्सव का मुख्य केंद्र होता है।"
-            },
-            { 
-                name: "શિરડી સાઈ બાબા મંદિર", 
-                description: "Shirdi Sai Baba", 
-                liveVideoId: "4-PkAQKpMkM", 
-                location: "Shirdi, Maharashtra", 
-                liveChannelUrl: "https://www.youtube.com/@saibabasansthantrust/live",
-                history: "શિરડી મહાન સંત સાઈ બાબાનું ઘર છે, જેઓ 50 વર્ષથી વધુ સમય સુધી અહીં રહ્યા હતા. તેમણે 'સૌનો માલિક એક'નું સાર્વત્રિક સૂત્ર શીખવ્યું હતું. સમાધિ મંદિર 1922 માં બનાવવામાં આવ્યું હતું અને તેમાં તેમના નશ્વર અવશેષો છે.",
-                history_en: "Shirdi is the home of the great saint Sai Baba, who lived here for over 50 years. He taught the universal slogan 'Sabka Malik Ek'. The Samadhi Mandir was built in 1922 and houses his mortal remains.",
-                history_hi: "शिरडी महान संत साईं बाबा का घर है, जो 50 वर्षों से अधिक समय तक यहाँ रहे। उन्होंने 'सबका मालिक एक' का सार्वभौमिक सूत्र सिखाया। समाधि मंदिर 1922 में बनाया गया था और इसमें उनके नश्वर अवशेष हैं।"
-            },
-            { 
-                name: "શનિ શિંગણાપુર", 
-                description: "Shani Shingnapur", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Ahmednagar, Maharashtra",
-                history: "આ ગામ પ્રખ્યાત છે કારણ કે કોઈ પણ ઘરને દરવાજા નથી, માત્ર દરવાજાની ફ્રેમ છે. એવું માનવામાં આવે છે કે ચોરીનો પ્રયાસ કરનારને શનિદેવ સજા કરે છે. દેવતા સ્વયંભૂ કાળા પથ્થર છે જે ખુલ્લા પ્લેટફોર્મ પર ઉભા છે.",
-                history_en: "This village is famous because no house has doors, only door frames. It is believed that Lord Shani (Saturn) punishes anyone attempting theft. The deity is a self-emerged black stone (Swayambhu) that stands on an open platform.",
-                history_hi: "यह गाँव इसलिए प्रसिद्ध है क्योंकि यहाँ किसी भी घर में दरवाज़े नहीं हैं, केवल दरवाज़े की चौखट हैं। ऐसा माना जाता है कि चोरी का प्रयास करने वाले को शनिदेव दंडित करते हैं। देवता स्वयंभू काला पत्थर है जो एक खुले चबूतरे पर खड़ा है।"
-            },
-            { 
-                name: "ત્ર્યંબકેશ્વર જ્યોતિર્લિંગ – નાશિક", 
-                description: "Trimbakeshwar Jyotirlinga", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Nashik, Maharashtra",
-                history: "ત્ર્યંબકેશ્વર 12 જ્યોતિર્લિંગોમાંનું એક છે અને ગોદાવરી નદીનું ઉદગમ સ્થાન છે. આ જ્યોતિર્લિંગની વિશિષ્ટતા તેના ત્રણ ચહેરા છે જે ભગવાન બ્રહ્મા, વિષ્ણુ અને રુદ્રનું પ્રતિક છે.",
-                history_en: "Trimbakeshwar is one of the 12 Jyotirlingas and the source of the Godavari river. The unique feature of this Jyotirlinga is its three faces embodying Lord Brahma, Vishnu, and Rudra.",
-                history_hi: "त्र्यंबकेश्वर 12 ज्योतिर्लिंगों में से एक है और गोदावरी नदी का उद्गम स्थल है। इस ज्योतिर्लिंग की विशेषता इसके तीन मुख हैं जो भगवान ब्रह्मा, विष्णु और रुद्र का प्रतीक हैं।"
-            },
-            { 
-                name: "ભીમાશંકર જ્યોતિર્લિંગ", 
-                description: "Bhimashankar Jyotirlinga", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Pune, Maharashtra",
-                history: "સહ્યાદ્રિ પર્વતમાળામાં આવેલું ભીમાશંકર બીજું એક જ્યોતિર્લિંગ છે. દંતકથા વર્ણવે છે કે કેવી રીતે ભગવાન શિવે અહીં ત્રિપુરાસુર રાક્ષસનો નાશ કર્યો હતો. તે જૈવવિવિધતાનું પણ મોટું કેન્દ્ર છે.",
-                history_en: "Situated in the Sahyadri hills, Bhimashankar is another Jyotirlinga. Legend relates how Lord Shiva destroyed the demon Tripurasura here. It is also a biodiversity hotspot.",
-                history_hi: "सह्याद्रि पर्वतमाला में स्थित भीमाशंकर एक और ज्योतिर्लिंग है। किंवदंती बताती है कि कैसे भगवान शिव ने यहाँ त्रिपुरासुर राक्षस का विनाश किया था। यह जैव विविधता का भी एक बड़ा केंद्र है।"
-            }
-        ]
-    },
-    {
-        state: "મધ્યપ્રદેશ",
-        temples: [
-            { 
-                name: "મહાકાળેશ્વર મંદિર – ઉજ્જૈન", 
-                description: "Mahakaleshwar Jyotirlinga", 
-                liveVideoId: "30Myx5zl7_I", 
-                location: "Ujjain, MP", 
-                liveChannelUrl: "https://www.youtube.com/@mahakaleshwarujjain/live",
-                history: "મહાકાલેશ્વર એકમાત્ર સ્વયંભૂ જ્યોતિર્લિંગ છે જ્યાં મૂર્તિ દક્ષિણ મુખી (દક્ષિણામૂર્તિ) છે. અહીંની ભસ્મ આરતી, જ્યાં દેવતાને પવિત્ર રાખથી શણગારવામાં આવે છે, તે વિશ્વ પ્રસિદ્ધ છે. તે કાલ (સમય) અને મૃત્યુના નિયમો અનુસાર થાય છે.",
-                history_en: "Mahakaleshwar is the only Swayambhu Jyotirlinga where the idol faces south (Dakshinamurti). The Bhasma Aarti here, where the deity is smeared with sacred ash, is world-famous. It is timed according to the Kaal (Time) and Death.",
-                history_hi: "महाकालेश्वर एकमात्र स्वयंभू ज्योतिर्लिंग है जहाँ मूर्ति दक्षिणमुखी (दक्षिणामूर्ति) है। यहाँ की भस्म आरती, जहाँ देवता को पवित्र राख से सजाया जाता है, विश्व प्रसिद्ध है। यह काल (समय) और मृत्यु के नियमों के अनुसार होती है।"
-            },
-            { 
-                name: "ઓંકારેશ્વર જ્યોતિર્લિંગ", 
-                description: "Omkareshwar Jyotirlinga", 
-                liveVideoId: "ApUGemfYdTc", 
-                location: "Khandwa, MP",
-                history: "ઓંકારેશ્વર નર્મદા નદીમાં માંધાતા નામના ટાપુ પર આવેલું છે, જેનો આકાર 'ઓમ' પ્રતીક જેવો છે. તે 12 જ્યોતિર્લિંગોમાંનું એક છે.",
-                history_en: "Omkareshwar is situated on an island called Mandhata in the Narmada river, which is shaped like the symbol 'Om'. It is one of the 12 Jyotirlingas.",
-                history_hi: "ओंकारेश्वर नर्मदा नदी में मांधाता नामक द्वीप पर स्थित है, जिसका आकार 'ओम' प्रतीक जैसा है। यह 12 ज्योतिर्लिंगों में से एक है।"
-            }
-        ]
-    },
-    {
-        state: "ઉત્તર પ્રદેશ",
-        temples: [
-            { 
-                name: "કાશી વિશ્વનાથ મંદિર – વારાણસી", 
-                description: "Kashi Vishwanath", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Varanasi, UP", 
-                liveChannelUrl: "https://www.youtube.com/@ShriKashiVishwanathTempleTrust/live",
-                history: "વારાણસીમાં ગંગાના કિનારે આવેલું, આ સૌથી પવિત્ર શિવ મંદિરોમાંનું એક છે. તેને અનેકવાર નાશ અને પુનર્નિર્મિત કરવામાં આવ્યું છે. વર્તમાન માળખું 1780માં અહલ્યાબાઈ હોલકરે બનાવ્યું હતું.",
-                history_en: "Located on the banks of the Ganges in Varanasi, this is one of the holiest Shiva temples. It has been destroyed and rebuilt multiple times. The current structure was built by Ahilyabai Holkar in 1780.",
-                history_hi: "वाराणसी में गंगा के तट पर स्थित, यह सबसे पवित्र शिव मंदिरों में से एक है। इसे कई बार नष्ट और पुनर्निर्मित किया गया है। वर्तमान संरचना 1780 में अहिल्याबाई होल्कर द्वारा बनाई गई थी।"
-            },
-            { 
-                name: "વૃંદાવન ISKCON મંદિર", 
-                description: "ISKCON Vrindavan", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Vrindavan, UP", 
-                liveChannelUrl: "https://www.youtube.com/@iskconvrindavan/live",
-                history: "કૃષ્ણ બલરામ મંદિર તરીકે પણ ઓળખાય છે, તે ભારતના મુખ્ય ઇસ્કોન મંદિરોમાંનું એક છે, જે 1975 માં ખોલવામાં આવ્યું હતું. સ્વામી પ્રભુપાદે વ્યક્તિગત રીતે તેના નિર્માણની દેખરેખ રાખી હતી.",
-                history_en: "Also known as the Krishna Balaram Mandir, it is one of the major ISKCON temples in India, opened in 1975. Swami Prabhupada personally oversaw its construction.",
-                history_hi: "कृष्ण बलराम मंदिर के रूप में भी जाना जाता है, यह भारत के प्रमुख इस्कॉन मंदिरों में से एक है, जिसे 1975 में खोला गया था। स्वामी प्रभुपाद ने व्यक्तिगत रूप से इसके निर्माण की देखरेख की थी।"
-            },
-            { 
-                name: "બાંકે બિહારી", 
-                description: "Banke Bihari", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Vrindavan, UP",
-                history: "ભગવાન કૃષ્ણને સમર્પિત, અહીંની મૂર્તિ ત્રિભંગ મુદ્રામાં ઊભી છે. તેની સ્થાપના સ્વામી હરિદાસે કરી હતી. ભક્તોને ભગવાનની તીવ્ર આંખોથી અભિભૂત થતા અટકાવવા માટે દેવતાની સામેનો પડદો વારંવાર બંધ અને ખોલવામાં આવે છે.",
-                history_en: "Dedicated to Lord Krishna, the idol here stands in the Tribhanga posture. It was established by Swami Haridas. The curtain before the deity is frequently closed and opened to prevent devotees from being overwhelmed by the intense eyes of the Lord.",
-                history_hi: "भगवान कृष्ण को समर्पित, यहाँ की मूर्ति त्रिभंग मुद्रा में खड़ी है। इसकी स्थापना स्वामी हरिदास ने की थी। भक्तों को भगवान की तीव्र आँखों से अभिभूत होने से रोकने के लिए देवता के सामने का पर्दा बार-बार बंद और खोला जाता है।"
-            }
-        ]
-    },
-    {
-        state: "આંધ્ર પ્રદેશ",
-        temples: [
-            { 
-                name: "તિરુપતિ બાલાજી મંદિર – તિરુમલા", 
-                description: "Tirumala Venkateswara", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Tirumala, AP",
-                history: "વિષ્ણુના અવતાર ભગવાન વેંકટેશ્વરને સમર્પિત એક સીમાચિહ્નરૂપ વૈષ્ણવ મંદિર. દાનની દ્રષ્ટિએ તે વિશ્વનું સૌથી ધનિક મંદિર છે. ઈતિહાસ પલ્લવ વંશ (9મી સદી) અને વિજયનગર સામ્રાજ્યનો છે.",
-                history_en: "A landmark Vaishnavite temple dedicated to Lord Venkateswara, an avatar of Vishnu. It is the richest temple in the world in terms of donations. History dates back to the Pallava dynasty (9th century) and Vijayanagara Empire.",
-                history_hi: "विष्णु के अवतार भगवान वेंकटेश्वर को समर्पित एक ऐतिहासिक वैष्णव मंदिर। दान के मामले में यह दुनिया का सबसे अमीर मंदिर है। इतिहास पल्लव वंश (9वीं शताब्दी) और विजयनगर साम्राज्य का है।"
-            },
-            { 
-                name: "શ્રી કાલહસ્તી મંદિર", 
-                description: "Srikalahasti Temple", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Srikalahasti, AP",
-                history: "તેના વાયુ લિંગ માટે પ્રખ્યાત છે, જે પંચ ભૂત સ્થળોમાંનું એક છે. દંતકથામાં સ્પાઈડર (શ્રી), સાપ (કાલા) અને હાથી (હસ્તી) નો સમાવેશ થાય છે જેમણે શિવની પૂજા કરી અને અહીં મોક્ષ પ્રાપ્ત કર્યો.",
-                history_en: "Famous for its Vayu (Air) Linga, one of the Pancha Bhoota Sthalams. The legend involves a Spider (Sri), Snake (Kala), and Elephant (Hasti) who worshipped Shiva and attained modification here.",
-                history_hi: "अपने वायु लिंग के लिए प्रसिद्ध, जो पंच भूत स्थलों में से एक है। किंवदंती में मकड़ी (श्री), सर्प (काला) और हाथी (हस्ती) शामिल हैं जिन्होंने शिव की पूजा की और यहाँ मोक्ष प्राप्त किया।"
-            }
-        ]
-    },
-    {
-        state: "ઓડિશા",
-        temples: [
-            { 
-                name: "જગન્નાથ મંદિર – પુરી", 
-                description: "Jagannath Temple", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Puri, Odisha", 
-                liveChannelUrl: "https://www.youtube.com/@JagannathTemplePuriOfficial/live",
-                history: "વાર્ષિક રથયાત્રા માટે પ્રખ્યાત. આ મંદિર ભગવાન જગન્નાથ (કૃષ્ણ), બલભદ્ર અને સુભદ્રાને સમર્પિત છે. નવકલેબરા નામની વિધિમાં લાકડાની મૂર્તિઓ દર 12 કે 19 વર્ષે બદલવામાં આવે છે. તે ચાર ધામોમાંનું એક છે.",
-                history_en: "Famous for the annual Ratha Yatra. This temple is dedicated to Lord Jagannath (Krishna), Balabhadra, and Subhadra. The wooden idols are replaced every 12 or 19 years in a ritual called Nabakalebara. It is one of the Char Dhams.",
-                history_hi: "वार्षिक रथ यात्रा के लिए प्रसिद्ध। यह मंदिर भगवान जगन्नाथ (कृष्ण), बलभद्र और सुभद्रा को समर्पित है। नवकलेवर नामक अनुष्ठान में लकड़ी की मूर्तियाँ हर 12 या 19 साल में बदली जाती हैं। यह चार धामों में से एक है।"
-            }
-        ]
-    },
-    {
-        state: "રાજસ્થાન",
-        temples: [
-            { 
-                name: "શ્રીનાથજી મંદિર – નાથદ્વારા", 
-                description: "Shrinathji Temple", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Nathdwara, Rajasthan", 
-                liveChannelUrl: "https://www.youtube.com/@ShrinathjiTempleNathdwara/live",
-                history: "આ મંદિરમાં ગોવર્ધન પર્વતને ઉંચકતા 7 વર્ષના કૃષ્ણની મૂર્તિ છે. મુઘલ બાદશાહ ઔરંગઝેબથી બચાવવા માટે 17મી સદીમાં આ મૂર્તિ મથુરા નજીક ગોવર્ધનથી અહીં લાવવામાં આવી હતી.",
-                history_en: "The temple houses the idol of 7-year-old Krishna lifting Govardhan Hill. The idol was brought here from Govardhan near Mathura in the 17th century to protect it from Mughal Emperor Aurangzeb.",
-                history_hi: "इस मंदिर में गोवर्धन पर्वत को उठाते हुए 7 साल के कृष्ण की मूर्ति है। मुगल बादशाह औरंगजेब से बचाने के लिए 17वीं शताब्दी में इस मूर्ति को मथुरा के पास गोवर्धन से यहाँ लाया गया था।"
-            },
-            { 
-                name: "સાલાસર બાલાજી", 
-                description: "Salasar Balaji", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Salasar, Rajasthan",
-                history: "ભગવાન હનુમાનને સમર્પિત. તે અનોખું છે કારણ કે અહીં હનુમાનજીની ગોળ ચહેરા અને દાઢી/મૂછ સાથે પૂજા કરવામાં આવે છે. તેની સ્થાપના 1754માં એક ખેડૂત ભક્ત દ્વારા કરવામાં આવી હતી.",
-                history_en: "Dedicated to Lord Hanuman. It is unique because Hanuman is worshipped here with a round face and beard/moustache. It was founded in 1754 by a farmer devotee.",
-                history_hi: "भगवान हनुमान को समर्पित। यह अद्वितीय है क्योंकि यहाँ हनुमान जी की गोल चेहरे और दाढ़ी/मूँछ के साथ पूजा की जाती है। इसकी स्थापना 1754 में एक किसान भक्त द्वारा की गई थी।"
-            }
-        ]
-    },
-    {
-        state: "તમિલનાડુ",
-        temples: [
-            { 
-                name: "મીનાક્ષી અમ્મન મંદિર – મદુરાઈ", 
-                description: "Meenakshi Temple", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Madurai, TN",
-                history: "વૈગાઈ નદીના દક્ષિણ કિનારે આવેલું એક ઐતિહાસિક હિન્દુ મંદિર. તે મીનાક્ષી (પાર્વતી) અને તેમના પતિક સુંદરેશ્વર (શિવ) ને સમર્પિત છે. મંદિર સંકુલમાં 14 સ્મારક ગોપુરમ (ગેટવે ટાવર) નો સમાવેશ થાય છે અને તે દ્રવિડિયન સ્થાપત્યની અદભૂત કૃતિ છે.",
-                history_en: "A historic Hindu temple located on the southern bank of the Vaigai River. It is dedicated to Meenakshi (Parvati) and her consort Sundareshwar (Shiva). The temple complex includes 14 monumental gopurams (gateway towers) and is a masterpiece of Dravidian architecture.",
-                history_hi: "वैगई नदी के दक्षिणी तट पर स्थित एक ऐतिहासिक हिंदू मंदिर। यह मीनाक्षी (पार्वती) और उनके पति सुंदरेश्वर (शिव) को समर्पित है। मंदिर परिसर में 14 स्मारक गोपुरम (प्रवेश द्वार मीनारें) शामिल हैं और यह द्रविड़ वास्तुकला की एक उत्कृष्ट कृति है।"
-            },
-            { 
-                name: "રમેશ્વરમ મંદિર", 
-                description: "Ramanathaswamy Temple", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Rameswaram, TN",
-                history: "રામનાથસ્વામી મંદિર 12 જ્યોતિર્લિંગોમાંનું એક છે. દંતકથા કહે છે કે ભગવાન રામે રાવણને મારવાના પાપમાંથી મુક્તિ મેળવવા માટે અહીં ભગવાન શિવની પૂજા કરી હતી. આ મંદિરમાં ભારતના તમામ હિન્દુ મંદિરોમાં સૌથી લાંબો કોરિડોર છે.",
-                history_en: "Ramanathaswamy Temple is one of the 12 Jyotirlingas. Legend says Lord Rama worshipped Lord Shiva here to absolve the sins of killing Ravana. The temple has the longest corridor among all Hindu temples in India.",
-                history_hi: "रामनाथस्वामी मंदिर 12 ज्योतिर्लिंगों में से एक है। किंवदंती है कि भगवान राम ने रावण को मारने के पाप से मुक्ति पाने के लिए यहाँ भगवान शिव की पूजा की थी। इस मंदिर में भारत के सभी हिंदू मंदिरों में सबसे लंबा गलियारा है।"
-            }
-        ]
-    },
-    {
-        state: "કેરળ",
-        temples: [
-            { 
-                name: "ગુરુવાયુર શ્રી કૃષ્ણ મંદિર", 
-                description: "Guruvayur Temple", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Guruvayur, Kerala",
-                history: "ઘણીવાર 'દક્ષિણની દ્વારકા' કહેવાય છે. ગુરુવાયુરપ્પન (કૃષ્ણ) ની મૂર્તિ વિશે કહેવાય છે કે ભગવાન બ્રહ્મા અને પાછળથી કૃષ્ણના માતાપિતા, વાસુદેવ અને દેવકી દ્વારા તેની પૂજા કરવામાં આવી હતી. તેની સ્થાપના અહીં ગુરુ (બૃહસ્પતિ) અને વાયુ (પવન દેવ) દ્વારા કરવામાં આવી હતી.",
-                history_en: "Often called 'Dwarka of the South'. The idol of Guruvayurappan (Krishna) is said to have been worshipped by Lord Brahma and later by Krishna's parents, Vasudeva and Devaki. It was installed here by Guru (Brihaspati) and Vayu (Wind God).",
-                history_hi: "अक्सर 'दक्षिण की द्वारका' कहा जाता है। गुरुवायुरप्पन (कृष्ण) की मूर्ति के बारे में कहा जाता है कि भगवान ब्रह्मा और बाद में कृष्ण के माता-पिता, वासुदेव और देवकी द्वारा इसकी पूजा की गई थी। इसकी स्थापना यहाँ गुरु (बृहस्पति) और वायु (पवन देव) द्वारा की गई थी।"
-            }
-        ]
-    },
-    {
-        state: "જમ્મુ & કાશ્મીર",
-        temples: [
-            { 
-                name: "વૈષ્ણો દેવી મંદિર – કટરા", 
-                description: "Vaishno Devi", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Katra, J&K", 
-                liveChannelUrl: "https://www.youtube.com/@Official.SMVDSB/live",
-                history: "ત્રિકુટા પર્વતોમાં આવેલું છે. દેવી વૈષ્ણો દેવી (મહાલક્ષ્મી, મહાકાલી અને મહાસરસ્વતીનું સ્વરૂપ) અહીં પિંડી તરીકે ઓળખાતી ત્રણ કુદરતી ખડકોના રૂપમાં બિરાજમાન છે. તે તેના ભક્તોને શક્તિ અને પરિપૂર્ણતા પ્રદાન કરે છે.",
-                history_en: "Located in the Trikuta Mountains. Goddess Vaishno Devi (a manifestation of Mahalakshmi, Mahakali, and Mahasaraswati) resides here in the form of three natural rocks known as Pindies. She bestows strength and fulfillment to her devotees.",
-                history_hi: "त्रिकुटा पर्वतों में स्थित है। देवी वैष्णो देवी (महालक्ष्मी, महाकाली और महासरस्वती का स्वरूप) यहाँ पिंडी के रूप में जानी जाने वाली तीन प्राकृतिक चट्टानों के रूप में विराजमान हैं। वह अपने भक्तों को शक्ति और परिपूर्णता प्रदान करती हैं।"
-            }
-        ]
-    },
-    {
-        state: "આસામ / પૂર્વ ભારત",
-        temples: [
-            { 
-                name: "કામાખ્યા દેવી મંદિર – આસામ", 
-                description: "Kamakhya Temple", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Guwahati, Assam",
-                history: "51 શક્તિપીઠોમાં સૌથી જૂનું અને સૌથી આદરણીય. તે સતીની યોનિ (ગર્ભ) નું પ્રતિનિધિત્વ કરે છે. આ મંદિર અંબુબાચી મેળા માટે પ્રખ્યાત છે, જે દરમિયાન દેવી તેમના વાર્ષિક માસિક ધર્મમાંથી પસાર થતી હોવાનું માનવામાં આવે છે.",
-                history_en: "Oldest and most revered of the 51 Shakti Peethas. It represents the yoni (womb) of Sati. The temple is famous for the Ambubachi Mela, during which the Goddess is believed to undergo her annual menstruation.",
-                history_hi: "51 शक्तिपीठों में सबसे पुराना और सबसे प्रतिष्ठित। यह सती की योनि (गर्भ) का प्रतिनिधित्व करता है। यह मंदिर अंबुबाची मेले के लिए प्रसिद्ध है, जिसके दौरान देवी के बारे में माना जाता है कि वह अपने वार्षिक मासिक धर्म से गुजरती हैं।"
-            },
-            { 
-                name: "કાલી ઘાટ મંદિર – કોલકાતા", 
-                description: "Kalighat Temple", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Kolkata, WB",
-                history: "એક મુખ્ય શક્તિપીઠ જ્યાં સતીના જમણા પગનો અંગૂઠો પડ્યો હતો. આ મંદિર દેવી કાલીને સમર્પિત છે અને 200 વર્ષ જૂનું છે, જોકે આ સ્થળ લાંબા સમયથી પવિત્ર છે.",
-                history_en: "A major Shakti Peetha where the toe of the right foot of Sati fell. This temple is dedicated to Goddess Kali and is 200 years old, although the site has been sacred for much longer.",
-                history_hi: "एक प्रमुख शक्तिपीठ जहाँ सती के दाहिने पैर का अंगूठा गिरा था। यह मंदिर देवी काली को समर्पित है और 200 साल पुराना है, हालाँकि यह स्थल लंबे समय से पवित्र है।"
-            }
-        ]
-    },
-    {
-        state: "પશ્ચિમ બંગાળ",
-        temples: [
-            { 
-                name: "ISKCON માયાપુર", 
-                description: "ISKCON Mayapur", 
-                liveVideoId: "PRE-RECORDED_VIDEO_ID", 
-                location: "Mayapur, WB", 
-                liveChannelUrl: "https://www.youtube.com/@IskconMayapur/live",
-                history: "માયાપુર 1486 માં ચૈતન્ય મહાપ્રભુ (કૃષ્ણનો અવતાર) નું જન્મસ્થળ છે. તે ઇસ્કોનનું મુખ્ય મથક છે. અહીં નિર્માણાધીન વૈદિક તારામંડળનું મંદિર વિશ્વના સૌથી મોટા મંદિરોમાંનું એક બનવા જઈ રહ્યું છે.",
-                history_en: "Mayapur is the birthplace of Chaitanya Mahaprabhu (an incarnation of Krishna) in 1486. It is the headquarters of ISKCON. The Temple of the Vedic Planetarium under construction here is set to becomes one of the world's largest temples.",
-                history_hi: "मायापुर 1486 में चैतन्य महाप्रभु (कृष्ण का अवतार) का जन्मस्थान है। यह इस्कॉन का मुख्यालय है। यहाँ निर्माणाधीन वैदिक तारामंडल का मंदिर दुनिया के सबसे बड़े मंदिरों में से एक बनने जा रहा है।"
-            }
-        ]
+        host: process.env.DB_HOST || 'localhost',
+        port: process.env.DB_PORT || 5432,
+        dialect: 'postgres',
+        logging: false // Toggle to true if you want to see SQL queries
     }
-];
+);
 
-const https = require('https');
+// --- Temple Model Definition ---
+const Temple = sequelize.define('Temple', {
+    name: { type: DataTypes.STRING, allowNull: false, unique: true },
+    name_en: DataTypes.STRING,
+    name_hi: DataTypes.STRING,
+    state: { type: DataTypes.STRING, allowNull: false },
+    district: { type: DataTypes.STRING, allowNull: true },
+    description: DataTypes.TEXT,
+    liveVideoId: DataTypes.STRING,
+    location: DataTypes.STRING,
+    liveChannelUrl: DataTypes.STRING,
+    socialLinks: { type: DataTypes.JSONB }, // Stores Facebook, Instagram etc.
+    keywords: { type: DataTypes.ARRAY(DataTypes.STRING) },
+    ignoreVideoIds: { type: DataTypes.ARRAY(DataTypes.STRING) },
+    history: DataTypes.TEXT,
+    history_en: DataTypes.TEXT,
+    history_hi: DataTypes.TEXT,
+    architecture: DataTypes.TEXT,
+    architecture_en: DataTypes.TEXT,
+    architecture_hi: DataTypes.TEXT,
+    significance: DataTypes.TEXT,
+    significance_en: DataTypes.TEXT,
+    significance_hi: DataTypes.TEXT,
+    bestTimeToVisit: DataTypes.STRING,
+    howToReach: DataTypes.TEXT,
+    nearbyAttractions: DataTypes.TEXT,
+    aartiTimings: { type: DataTypes.JSONB } // Dynamic timings
+});
+
+// --- User Model for Login/Registration ---
+const User = sequelize.define('User', {
+    name: { type: DataTypes.STRING, allowNull: false },
+    contact: { type: DataTypes.STRING, allowNull: false, unique: true }, // Email or Mobile (Login ID)
+    phoneNumber: { type: DataTypes.STRING }, // Explicit Mobile Number for calls
+    password: { type: DataTypes.STRING, allowNull: true }, // Allow null temporarily to fix sync
+    lastLogin: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    rating: { type: DataTypes.INTEGER, defaultValue: 0 }, // User rating (1-5)
+    role: { type: DataTypes.STRING, defaultValue: 'user' }, // 'user' or 'admin'
+    wantsToWorkAsGuide: { type: DataTypes.BOOLEAN, defaultValue: false }
+});
+
+// --- OTP Model for Verification ---
+const Otp = sequelize.define('Otp', {
+    contact: { type: DataTypes.STRING, allowNull: false },
+    code: { type: DataTypes.STRING, allowNull: false },
+    expiresAt: { type: DataTypes.DATE, allowNull: false }
+});
+
+// --- Appointment Model for Guide Bookings ---
+const Appointment = sequelize.define('Appointment', {
+    userName: { type: DataTypes.STRING, allowNull: false },
+    userContact: { type: DataTypes.STRING, allowNull: false },
+    guideContact: { type: DataTypes.STRING, allowNull: false },
+    guideName: { type: DataTypes.STRING },
+    date: { type: DataTypes.STRING, allowNull: false },
+    status: { type: DataTypes.STRING, defaultValue: 'pending' }, // pending, accepted, rejected
+    bookedAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+});
+
+// ... (Skipping intermediate lines) ...
+
+// API: Update Profile
+app.post('/api/update-profile', async (req, res) => {
+    try {
+        const { contact, name, phoneNumber } = req.body;
+        if (!contact) {
+            return res.status(400).json({ error: "Missing contact identifier" });
+        }
+
+        const user = await User.findOne({ where: { contact } });
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        const updates = {};
+        if (name) updates.name = name;
+        if (phoneNumber) updates.phoneNumber = phoneNumber;
+
+        await user.update(updates);
+        console.log(`[USER] Profile Updated: ${user.name} (${user.contact})`);
+        res.json({ success: true, user });
+    } catch (error) {
+        console.error("Update Profile error:", error);
+        res.status(500).json({ error: "Failed to update profile" });
+    }
+});
+
+// --- Suggestion Model for User Feedback ---
+const Suggestion = sequelize.define('Suggestion', {
+    contact: { type: DataTypes.STRING, allowNull: false },
+    userName: { type: DataTypes.STRING },
+    category: { type: DataTypes.STRING },
+    message: { type: DataTypes.TEXT, allowNull: false },
+    status: { type: DataTypes.STRING, defaultValue: 'pending' }
+});
+
+// --- Local Guide Model (Employment) ---
+const Guide = sequelize.define('Guide', {
+    name: { type: DataTypes.STRING, allowNull: false },
+    contact: { type: DataTypes.STRING, allowNull: false, unique: true },
+    gender: { type: DataTypes.STRING }, 
+    age: { type: DataTypes.INTEGER },
+    district: { type: DataTypes.STRING, allowNull: false },
+    area: { type: DataTypes.STRING }, // Specific area within district
+    experience: { type: DataTypes.STRING },
+    languages: { type: DataTypes.STRING }, // e.g. "Gujarati, Hindi"
+    bio: { type: DataTypes.TEXT },
+    hourlyRate: { type: DataTypes.STRING }, // e.g. "₹200/hr"
+    isVerified: { type: DataTypes.BOOLEAN, defaultValue: false },
+    status: { type: DataTypes.STRING, defaultValue: 'active' }, // active, inactive
+    rating: { type: DataTypes.FLOAT, defaultValue: 4.5 }
+});
+
+// --- Guide Review Model ---
+const GuideReview = sequelize.define('GuideReview', {
+    guideContact: { type: DataTypes.STRING, allowNull: false },
+    guideName: { type: DataTypes.STRING },
+    userContact: { type: DataTypes.STRING, allowNull: false },
+    userName: { type: DataTypes.STRING },
+    appointmentId: { type: DataTypes.INTEGER }, // Link to the appointment
+    rating: { type: DataTypes.INTEGER, allowNull: false }, // 1-5 stars
+    comment: { type: DataTypes.TEXT },
+    createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+});
+
+// --- Initial Data for Seeding ---
+const INITIAL_TEMPLE_DATA = [];
+
+// --- Sync & Seed Database ---
+async function initDb() {
+    try {
+        await sequelize.authenticate();
+        console.log('PostgreSQL Connection has been established successfully.');
+
+        await sequelize.sync({ alter: true }); // Sync models to database
+        
+        const count = await Temple.count();
+        if (count === 0) {
+            console.log("Seeding initial temple data...");
+            for (const group of INITIAL_TEMPLE_DATA) {
+                for (const temple of group.temples) {
+                    await Temple.create({
+                        ...temple,
+                        state: group.state
+                    });
+                }
+            }
+            console.log("Seeding complete!");
+        }
+    } catch (error) {
+        console.error('Unable to connect to the database:', error);
+    }
+}
 
 // --- YouTube Live Check Logic ---
-
-// On-demand check function
 function checkYouTubeLive(channelUrl, callback, keywords = [], ignoreIds = []) {
     if (!channelUrl) {
         callback("PRE-RECORDED_VIDEO_ID");
         return;
     }
 
-    console.log(`[${new Date().toLocaleTimeString()}] Checking Live: ${channelUrl} ${keywords.length ? '(Keywords: ' + keywords.join(',') + ')' : ''}`);
+    // Standardize URL: Ensure it starts with https
+    if (!channelUrl.startsWith('http')) {
+        if (channelUrl.startsWith('@')) {
+            channelUrl = 'https://www.youtube.com/' + channelUrl;
+        } else {
+            channelUrl = 'https://www.youtube.com/@' + channelUrl;
+        }
+    }
+
+    // We'll try the provided URL and some common variants
+    const urlsToTry = [channelUrl];
     
+    // If it's a channel URL (has @ handle), also try the /live subpage
+    if (channelUrl.includes('youtube.com/@') && !channelUrl.endsWith('/live')) {
+        urlsToTry.push(channelUrl.endsWith('/') ? channelUrl + 'live' : channelUrl + '/live');
+    }
+    
+    // Also try /streams for some channels
+    if (channelUrl.includes('youtube.com/@') && !channelUrl.endsWith('/streams')) {
+        urlsToTry.push(channelUrl.endsWith('/') ? channelUrl + 'streams' : channelUrl + '/streams');
+    }
+
     const options = {
         headers: {
              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
+        },
+        timeout: 8000
     };
 
-    https.get(channelUrl, options, (res) => {
-        let data = '';
-        res.on('data', (chunk) => data += chunk);
-        res.on('end', () => {
-            let videoId = "PRE-RECORDED_VIDEO_ID";
-            let detectedTitle = "";
+    let triedCount = 0;
+    
+    function tryNextUrl() {
+        if (triedCount >= urlsToTry.length) {
+            callback("PRE-RECORDED_VIDEO_ID");
+            return;
+        }
 
-            // Strategy A: '/streams' List Page (Advanced Filtering)
-            if (channelUrl.includes('/streams')) {
-                // Regex to find videoRenderer blocks and extract ID, Title, and Live Status
-                // Matches: videoId":"..." ... title":{..."text":"..."} ... style":"LIVE" (roughly)
-                // We scan the whole file for "videoRenderer".
-                const renderers = data.split('videoRenderer');
-                
-                for (let i = 1; i < renderers.length; i++) {
-                    const block = renderers[i];
-                    
-                    // Check if this block is LIVE
-                    const isLive = block.includes('style="LIVE"') || 
-                                   block.includes('"label":"LIVE"') ||
-                                   block.includes('"text":"LIVE"'); // overlay text
+        const url = urlsToTry[triedCount];
+        triedCount++;
 
-                    if (isLive) {
-                        const idMatch = block.match(/"videoId":"([^"]+)"/);
-                        const titleMatch = block.match(/"title":\{"runs":\[\{"text":"(.*?)"\}\]/) || 
-                                           block.match(/"title":\{"simpleText":"(.*?)"\}/);
-                        
-                        if (idMatch) {
-                            const id = idMatch[1];
-                            const title = titleMatch ? titleMatch[1] : "Unknown Title";
-                            
-                            // Check blacklist
-                            if (ignoreIds.includes(id)) {
-                                console.log(`   ⛔ Ignored Blacklisted ID: ${id}`);
-                                continue;
-                            }
+        console.log(`[YOUTUBE] Checking: ${url}`);
+        
+        https.get(url, options, (res) => {
+            let data = '';
+            res.on('data', (chunk) => data += chunk);
+            res.on('end', () => {
+                let videoId = null;
 
-                            console.log(`   Found LIVE Stream: ${id} | Title: ${title}`);
-
-                            // If keywords provided, filter
-                            if (keywords.length > 0) {
-                                // loose match
-                                const match = keywords.some(k => title.toLowerCase().includes(k.toLowerCase()));
-                                if (match) {
-                                    console.log(`   ✅ Keyword Match! Selected: ${id}`);
-                                    videoId = id;
-                                    break; // Stop at first valid match
+                // Case 1: Checking a /streams page or /live page with multiple videos
+                if (url.includes('/streams') || url.includes('/live')) {
+                    const renderers = data.split('videoRenderer');
+                    for (let i = 1; i < renderers.length; i++) {
+                        const block = renderers[i];
+                        const isLive = block.includes('style="LIVE"') || block.includes('"label":"LIVE"') || block.includes('"text":"LIVE"');
+                        if (isLive) {
+                            const idMatch = block.match(/"videoId":"([^"]+)"/);
+                            if (idMatch) {
+                                const id = idMatch[1];
+                                if (ignoreIds && ignoreIds.includes(id)) continue;
+                                
+                                // Optional keyword check
+                                if (keywords && keywords.length > 0) {
+                                    const titleMatch = block.match(/"title":\{"runs":\[\{"text":"(.*?)"\}\]/) || block.match(/"title":\{"simpleText":"(.*?)"\}/);
+                                    const title = titleMatch ? titleMatch[1] : "";
+                                    if (keywords.some(k => title.toLowerCase().includes(k.toLowerCase()))) {
+                                        videoId = id;
+                                        break;
+                                    }
                                 } else {
-                                    console.log(`   ❌ Skipped (Keyword mismatch)`);
+                                    videoId = id;
+                                    break;
                                 }
-                            } else {
-                                // No keywords, take the first live one
-                                videoId = id;
-                                break;
                             }
                         }
                     }
                 }
 
-            } else {
-                // Strategy B: '/live' Direct Page (Default)
-                const isLive = data.includes('isLive":true') || 
-                               data.includes('"status":"LIVE"') ||
-                               data.includes('"PLAYER_LIVE_LABEL":"Live"') ||
-                               data.includes('style="LIVE"');
-
-                // Try to find ID
-                const videoIdMatch = data.match(/"videoId":"([^"]+)"/);
-                const canonicalMatch = data.match(/link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([^"]+)"/);
-
-                let id = null;
-                if (videoIdMatch) id = videoIdMatch[1];
-                else if (canonicalMatch) id = canonicalMatch[1];
-
-                // Check blacklist for Strategy B too
-                if (id && ignoreIds.includes(id)) {
-                     console.log(`   ⛔ Ignored Blacklisted ID (Strategy B): ${id}`);
-                     id = null; // Reset
+                // Case 2: Direct channel home or fallback for /live
+                if (!videoId) {
+                    const isLive = data.includes('isLive":true') || 
+                                   data.includes('"status":"LIVE"') || 
+                                   data.includes('"PLAYER_LIVE_LABEL":"Live"') || 
+                                   data.includes('style="LIVE"');
+                    
+                    const videoIdMatch = data.match(/"videoId":"([^"]+)"/);
+                    const canonicalMatch = data.match(/link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([^"]+)"/);
+                    
+                    let id = videoIdMatch ? videoIdMatch[1] : (canonicalMatch ? canonicalMatch[1] : null);
+                    
+                    if (isLive && id && (!ignoreIds || !ignoreIds.includes(id))) {
+                        videoId = id;
+                    }
                 }
 
-                if (isLive && id) videoId = id;
-                else if (!isLive) videoId = "PRE-RECORDED_VIDEO_ID";
-            }
-            
-            if (videoId !== "PRE-RECORDED_VIDEO_ID") {
-                console.log(`   -> Result: ${videoId}`);
-                callback(videoId);
-            } else {
-                console.log(`   -> Result: Offline / No Match`);
-                callback("PRE-RECORDED_VIDEO_ID");
-            }
+                if (videoId) {
+                    console.log(`[YOUTUBE] Found Live: ${videoId} at ${url}`);
+                    callback(videoId);
+                } else {
+                    tryNextUrl();
+                }
+            });
+        }).on('error', (err) => {
+            console.error(`[ERROR] Request failed for ${url}: ${err.message}`);
+            tryNextUrl();
         });
-    }).on('error', (err) => {
-        console.error(`[ERROR] Live check failed: ${err.message}`);
-        callback("PRE-RECORDED_VIDEO_ID");
-    });
+    }
+
+    tryNextUrl();
 }
 
-// Generic Live Check Endpoint
+// --- Helper: Send OTP via Email or SMS ---
+const sendOtpMessage = async (contact, code) => {
+    const isEmail = contact.includes('@');
+    console.log(`[OTP] Sending ${code} to ${contact} via ${isEmail ? 'Email' : 'SMS'}`);
+
+    if (isEmail) {
+        // NODEMAILER SETUP (Use Gmail or SMTP from .env)
+        // If credentials missing, log to console for debugging
+        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+            console.log(`[WARNING] No Email credentials found. OTP: ${code}`);
+            return true; 
+        }
+
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
+        });
+
+        await transporter.sendMail({
+            from: `"Divya Darshan" <${process.env.EMAIL_USER}>`,
+            to: contact,
+            subject: "Verification Code - Divya Darshan",
+            text: `Your OTP is: ${code}`,
+            html: `<h3>Your Divya Darshan Verification Code is: <b>${code}</b></h3><p>Valid for 10 minutes.</p>`
+        });
+    } else {
+        // TWILIO SMS SETUP
+        if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+            console.log(`[WARNING] No Twilio credentials found. OTP: ${code}`);
+            return true;
+        }
+
+        try {
+            const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+            const message = await client.messages.create({
+                body: `OTP: ${code}`, // Adding "OTP:" keyword helps avoid some spam filters
+                from: process.env.TWILIO_PHONE_NUMBER,
+                to: contact
+            });
+            console.log(`[SMS] Message Sent! SID: ${message.sid}, Status: ${message.status}`);
+        } catch (error) {
+            console.error(`[SMS Error] Failed to send to ${contact}:`, error.message);
+            throw error; // Let the API endpoint handle it
+        }
+    }
+    return true;
+};
+
+// API: Check Live Video ID for a Channel URL
 app.get('/api/live-check', (req, res) => {
-    const { channelUrl, keywords } = req.query;
-    const keywordArray = keywords ? keywords.split(',') : [];
+    const { channelUrl } = req.query;
+    if (!channelUrl) return res.status(400).json({ error: "Missing channelUrl" });
+
     checkYouTubeLive(channelUrl, (videoId) => {
         res.json({ videoId });
-    }, keywordArray);
+    });
 });
 
 // --- Automatic Periodic Updates ---
-function updateAllLiveStatuses() {
+async function updateAllLiveStatuses() {
     console.log(`[${new Date().toLocaleTimeString()}] 🔄 Running Automatic Live Check for all temples...`);
     
-    TEMPLE_DATA.forEach(group => {
-        group.temples.forEach(temple => {
-            if (temple.liveChannelUrl) {
-                checkYouTubeLive(temple.liveChannelUrl, (videoId) => {
-                    // Update the in-memory data
-                    const isLive = videoId && videoId !== "PRE-RECORDED_VIDEO_ID";
-                    
-                    if (isLive) {
-                        if (temple.liveVideoId !== videoId) {
-                            console.log(`✅ LIVE UPDATE for ${temple.name}: ${videoId}`);
-                            temple.liveVideoId = videoId;
-                        }
-                    } else {
-                        // Keep manual default if offline? Or set to offline?
-                        // For Somnath, we want strict adherence to real live vs offline
-                        if (temple.liveVideoId !== "PRE-RECORDED_VIDEO_ID") {
-                             // Only reset if it was previously auto-detected live. 
-                             // If it was manual hardcode, maybe keep it? 
-                             // But here we want automation.
-                             // Let's reset to ensure we don't show stale streams.
-                             temple.liveVideoId = "PRE-RECORDED_VIDEO_ID";
-                        }
+    try {
+        const temples = await Temple.findAll({ where: { liveChannelUrl: { [Sequelize.Op.ne]: null } } });
+        
+        for (const temple of temples) {
+            checkYouTubeLive(temple.liveChannelUrl, async (videoId) => {
+                const isLive = videoId && videoId !== "PRE-RECORDED_VIDEO_ID";
+                
+                if (isLive) {
+                    if (temple.liveVideoId !== videoId) {
+                        console.log(`✅ LIVE UPDATE for ${temple.name}: ${videoId}`);
+                        await temple.update({ liveVideoId: videoId });
                     }
-                }, temple.keywords || [], temple.ignoreVideoIds || []);
-            }
-        });
-    });
+                } else if (temple.liveVideoId !== "PRE-RECORDED_VIDEO_ID") {
+                    console.log(`📡 OFFLINE: ${temple.name} (Resetting to fallback)`);
+                    await temple.update({ liveVideoId: "PRE-RECORDED_VIDEO_ID" });
+                }
+            }, temple.keywords || [], temple.ignoreVideoIds || []);
+        }
+    } catch (error) {
+        console.error("Error updating live statuses:", error);
+    }
 }
 
-// Run immediately on server start
-setTimeout(updateAllLiveStatuses, 5000); // 5 sec delay to allow startup
+// API: Send OTP
+app.post('/api/send-otp', async (req, res) => {
+    try {
+        const { contact, type } = req.body; // type: 'login' or 'register'
+        if (!contact) return res.status(400).json({ error: "Contact is required" });
 
-// Run every 10 minutes
-setInterval(updateAllLiveStatuses, 10 * 60 * 1000);
+        // If register, check if user already exists
+        if (type === 'register') {
+            const user = await User.findOne({ where: { contact } });
+            if (user) return res.status(400).json({ error: "User already registered" });
+        }
 
-app.get('/api/temples', (req, res) => {
-    res.json(TEMPLE_DATA);
+        // Generate 6 digit pin
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+
+        // Save to DB
+        await Otp.destroy({ where: { contact } }); // Clean previous
+        await Otp.create({ contact, code, expiresAt });
+
+        // Send
+        await sendOtpMessage(contact, code);
+
+        res.json({ success: true, message: "OTP sent successfully" });
+    } catch (error) {
+        console.error("Send OTP Error:", error);
+        res.status(500).json({ error: "Failed to send OTP. Please check credentials." });
+    }
 });
 
-// Backward compatibility (optional, but good if app is still hitting it)
-app.get('/api/darshan', (req, res) => {
-    // Return Somnath by default for the old endpoint
-    res.json(TEMPLE_DATA[0].temples[1]); 
+// API: Verify OTP
+app.post('/api/verify-otp', async (req, res) => {
+    try {
+        const { contact, code } = req.body;
+        if (!contact || !code) return res.status(400).json({ error: "Contact and Code are required" });
+
+        const otpRecord = await Otp.findOne({ 
+            where: { 
+                contact, 
+                code,
+                expiresAt: { [Op.gt]: new Date() }
+            } 
+        });
+
+        if (!otpRecord) {
+            return res.status(400).json({ error: "Invalid or expired OTP" });
+        }
+
+        // Delete used OTP
+        await otpRecord.destroy();
+
+        res.json({ success: true, message: "OTP verified" });
+    } catch (error) {
+        console.error("Verify OTP Error:", error);
+        res.status(500).json({ error: "Failed to verify OTP" });
+    }
 });
 
-app.listen(port, '0.0.0.0', () => {
-    console.log(`\n--- Somnath Aarti Server ---`);
-    console.log(`Local:   http://localhost:${port}`);
+// API: Register User
+app.post('/api/register', async (req, res) => {
+    try {
+        const { name, contact, password } = req.body;
+        if (!name || !contact || !password) {
+            return res.status(400).json({ error: "All fields are required" });
+        }
+
+        // Check if user exists
+        const existingUser = await User.findOne({ where: { contact } });
+        if (existingUser) {
+            return res.status(400).json({ error: "User already registered. Please login." });
+        }
+
+        // Create user
+        const user = await User.create({ 
+            name, 
+            contact, 
+            password, 
+            wantsToWorkAsGuide: req.body.wantsToWorkAsGuide || false 
+        });
+        
+        // If user wants to work as guide, auto-create a Guide entry if it doesn't exist
+        if (user.wantsToWorkAsGuide) {
+            const existingGuide = await Guide.findOne({ where: { contact: user.contact } });
+            if (!existingGuide) {
+                await Guide.create({
+                    name: user.name,
+                    contact: user.contact,
+                    district: 'Other', // Placeholder, user will need to update
+                    status: 'active',
+                    isVerified: false
+                });
+            }
+        }
+
+        console.log(`[USER] Registered: ${user.name} (${user.contact}) - Guide: ${user.wantsToWorkAsGuide}`);
+        res.json({ success: true, user });
+    } catch (error) {
+        console.error("Registration error:", error);
+        res.status(500).json({ error: "Registration failed" });
+    }
+});
+
+// API: Login User
+app.post('/api/login', async (req, res) => {
+    try {
+        const { contact, password } = req.body;
+        if (!contact || !password) {
+            return res.status(400).json({ error: "Missing contact or password" });
+        }
+
+        // Find user
+        const user = await User.findOne({ where: { contact } });
+        if (!user) {
+            return res.status(404).json({ error: "User not found. Please register." });
+        }
+
+        // Check password (In production use bcrypt!)
+        if (user.password !== password) {
+            return res.status(401).json({ error: "Incorrect password" });
+        }
+
+        // Update last login timestamp
+        await user.update({ lastLogin: new Date() });
+
+        console.log(`[USER] Logged in: ${user.name} (${user.contact})`);
+        res.json({ success: true, user });
+    } catch (error) {
+        console.error("Login error:", error);
+        res.status(500).json({ error: "Login failed" });
+    }
+});
+
+// API: Get all temples grouped by state and district
+app.get('/api/temples', async (req, res) => {
+    try {
+        const temples = await Temple.findAll({
+            order: [
+                ['state', 'ASC'],
+                ['district', 'ASC'],
+                ['name', 'ASC']
+            ]
+        });
+        
+        // Grouping by State -> District logic
+        const grouped = temples.reduce((acc, temple) => {
+            const state = temple.state;
+            const district = temple.district || 'Other'; // Default if district is missing
+
+            if (!acc[state]) {
+                acc[state] = { 
+                    state: state, 
+                    districts: {} 
+                };
+            }
+            
+            if (!acc[state].districts[district]) {
+                acc[state].districts[district] = {
+                    district: district,
+                    temples: []
+                };
+            }
+
+            acc[state].districts[district].temples.push(temple);
+            return acc;
+        }, {});
+
+        // Convert structure to Arrays for Frontend: [{ state, districts: [{ district, temples: [] }] }]
+        const result = Object.values(grouped).map(stateGroup => ({
+            state: stateGroup.state,
+            districts: Object.values(stateGroup.districts)
+        }));
+
+        res.json(result);
+    } catch (error) {
+        console.error("Fetch Temples Error:", error);
+        res.status(500).json({ error: "Failed to fetch temples" });
+    }
+});
+
+// Backward compatibility (Somnath Aarti)
+app.get('/api/darshan', async (req, res) => {
+    try {
+        const somnath = await Temple.findOne({ where: { name: "સોમનાથ મહાદેવ – સોમનાથ" } });
+        res.json(somnath);
+    } catch (error) {
+        res.status(500).json({ error: "Failed to fetch Somnath data" });
+    }
+});
+// API: Reset Password
+app.post('/api/reset-password', async (req, res) => {
+    try {
+        const { contact, newPassword } = req.body;
+        if (!contact || !newPassword) {
+            return res.status(400).json({ error: "Missing contact or new password" });
+        }
+
+        console.log(`[RESET] Attempt for contact: "${contact}"`);
+        const user = await User.findOne({ where: { contact } });
+        if (!user) {
+            console.log(`[RESET] User not found for contact: "${contact}"`);
+            return res.status(404).json({ error: "User not found with this contact" });
+        }
+
+        await user.update({ password: newPassword });
+        console.log(`[USER] Password Reset Success for: ${user.name} (${user.contact})`);
+        res.json({ success: true, message: "Password updated successfully" });
+    } catch (error) {
+        console.error("Reset Password error:", error);
+        res.status(500).json({ error: "Failed to reset password" });
+    }
+});
+
+// API: Update Profile
+app.post('/api/update-profile', async (req, res) => {
+    try {
+        const { contact, name } = req.body;
+        if (!contact || !name) {
+            return res.status(400).json({ error: "Missing contact or name" });
+        }
+
+        const user = await User.findOne({ where: { contact } });
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        await user.update({ name });
+        console.log(`[USER] Profile Updated: ${user.name} (${user.contact})`);
+        res.json({ success: true, user });
+    } catch (error) {
+        console.error("Update Profile error:", error);
+        res.status(500).json({ error: "Failed to update profile" });
+    }
+});
+
+// API: Rate App
+app.post('/api/rate-app', async (req, res) => {
+    try {
+        const { contact, rating } = req.body;
+        if (!contact || rating === undefined) {
+            return res.status(400).json({ error: "Missing contact or rating" });
+        }
+
+        const user = await User.findOne({ where: { contact } });
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        await user.update({ rating });
+        console.log(`[USER] Rated App: ${user.name} (${user.contact}) - ${rating} Stars`);
+        res.json({ success: true, user });
+    } catch (error) {
+        console.error("Rate App error:", error);
+        res.status(500).json({ error: "Failed to save rating" });
+    }
+});
+
+// API: Submit Suggestion
+app.post('/api/suggestions', async (req, res) => {
+    try {
+        const { contact, userName, category, message } = req.body;
+        if (!contact || !message) {
+            return res.status(400).json({ error: "Missing contact or message" });
+        }
+
+        const suggestion = await Suggestion.create({ contact, userName, category, message });
+        console.log(`[SUGGESTION] from ${userName} (${contact}): ${message.substring(0, 50)}...`);
+        res.json({ success: true, suggestion });
+    } catch (error) {
+        console.error("Suggestion error:", error);
+        res.status(500).json({ error: "Failed to submit suggestion" });
+    }
+});
+
+// API: Admin Register User (Main Admin, Sub Admin, User)
+app.post('/api/admin/register-user', async (req, res) => {
+    try {
+        const { name, contact, password, role, phoneNumber } = req.body;
+        if (!name || !contact || !password || !role) {
+            return res.status(400).json({ error: "All fields including role are required" });
+        }
+
+        // Check if user exists
+        const existingUser = await User.findOne({ where: { contact } });
+        if (existingUser) {
+            return res.status(400).json({ error: "User already registered with this contact." });
+        }
+
+        // Create user with explicit role
+        const user = await User.create({ name, contact, password, role, phoneNumber });
+        console.log(`[ADMIN] Registered New User: ${user.name} (${user.contact}) as ${role}`);
+        res.json({ success: true, user });
+    } catch (error) {
+        console.error("Admin Registration error:", error);
+        res.status(500).json({ error: "Registration failed" });
+    }
+});
+
+// API: Get All Users (For Admin Management)
+app.get('/api/admin/users', async (req, res) => {
+    try {
+        const users = await User.findAll({ 
+            order: [['createdAt', 'DESC']],
+            attributes: ['id', 'name', 'contact', 'role', 'phoneNumber', 'createdAt'] // Exclude password
+        });
+        res.json(users);
+    } catch (error) {
+        console.error("Fetch Users Error:", error);
+        res.status(500).json({ error: "Failed to fetch users" });
+    }
+});
+
+// API: Update User (Admin)
+app.put('/api/admin/users/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, contact, role, phoneNumber, password } = req.body;
+        
+        const user = await User.findByPk(id);
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        const updates = { name, contact, role, phoneNumber };
+        if (password && password.trim() !== '') {
+            updates.password = password;
+        }
+
+        await user.update(updates);
+        console.log(`[ADMIN] Updated User: ${user.name}`);
+        res.json({ success: true, user });
+    } catch (error) {
+        console.error("Update User Error:", error);
+        res.status(500).json({ error: "Failed to update user" });
+    }
+});
+
+// API: Delete User (Admin)
+app.delete('/api/admin/users/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const user = await User.findByPk(id);
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        await user.destroy();
+        console.log(`[ADMIN] Deleted User: ${user.name}`);
+        res.json({ success: true, message: "User deleted successfully" });
+    } catch (error) {
+        console.error("Delete User Error:", error);
+        res.status(500).json({ error: "Failed to delete user" });
+    }
+});
+
+// --- ADMIN APIs ---
+
+// GET: All Suggestions
+app.get('/api/admin/suggestions', async (req, res) => {
+    try {
+        const suggestions = await Suggestion.findAll({ order: [['createdAt', 'DESC']] });
+        res.json(suggestions);
+    } catch (error) {
+        res.status(500).json({ error: "Failed to fetch suggestions" });
+    }
+});
+
+// POST: Update Suggestion Status
+app.post('/api/admin/update-suggestion-status', async (req, res) => {
+    try {
+        const { id, status } = req.body;
+        if (!id || !status) {
+            return res.status(400).json({ error: "Suggestion ID and status are required" });
+        }
+
+        const suggestion = await Suggestion.findByPk(id);
+        if (suggestion) {
+            await suggestion.update({ status });
+            return res.json({ success: true, message: "Status updated" });
+        }
+        res.status(404).json({ error: "Suggestion not found" });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to update status" });
+    }
+});
+
+// GET: All User Ratings
+app.get('/api/admin/ratings', async (req, res) => {
+    try {
+        const ratings = await User.findAll({ 
+            where: { rating: { [Op.gt]: 0 } },
+            attributes: ['name', 'contact', 'rating'],
+            order: [['rating', 'DESC']]
+        });
+        res.json(ratings);
+    } catch (error) {
+        res.status(500).json({ error: "Failed to fetch ratings" });
+    }
+});
+
+// GET: All Guides (for Admin)
+app.get('/api/admin/guides', async (req, res) => {
+    try {
+        console.log("[ADMIN] Fetching all guides...");
+        const guides = await Guide.findAll({ order: [['createdAt', 'DESC']] });
+        console.log(`[ADMIN] Found ${guides.length} guides`);
+        res.json(guides);
+    } catch (error) {
+        console.error("[ADMIN] Fetch guides error:", error);
+        res.status(500).json({ error: "Failed to fetch guides: " + error.message });
+    }
+});
+
+// --- LOCAL GUIDE APIs (Employment) ---
+
+// API: Register as a Guide
+app.post('/api/guides/register', async (req, res) => {
+    try {
+        const { name, contact, district, experience, languages, bio, gender, age, area, hourlyRate } = req.body;
+        if (!name || !contact || !district) {
+            return res.status(400).json({ error: "Name, contact and district are required" });
+        }
+
+        const existing = await Guide.findOne({ where: { contact } });
+        if (existing) {
+            return res.status(400).json({ error: "Guide already registered with this contact" });
+        }
+
+        const guide = await Guide.create({ 
+            name, contact, district, experience, languages, bio,
+            gender, age, area, hourlyRate 
+        });
+        console.log(`[GUIDE] New Registration: ${name} in ${district}`);
+        res.json({ success: true, guide });
+    } catch (error) {
+        console.error("Guide registration error:", error);
+        res.status(500).json({ error: "Failed to register as guide" });
+    }
+});
+
+// API: Get Guides by District
+app.get('/api/guides/:district', async (req, res) => {
+    try {
+        const { district } = req.params;
+        const guides = await Guide.findAll({ 
+            where: { 
+                district: { [Op.iLike]: district.trim() },
+                status: 'active'
+            },
+            order: [['isVerified', 'DESC'], ['rating', 'DESC']]
+        });
+        res.json(guides);
+    } catch (error) {
+        console.error("Fetch guides error:", error);
+        res.status(500).json({ error: "Failed to fetch guides" });
+    }
+});
+
+// API: Admin Verify Guide
+app.post('/api/admin/verify-guide', async (req, res) => {
+    try {
+        const { id, isVerified } = req.body;
+        const guide = await Guide.findByPk(id);
+        if (guide) {
+            await guide.update({ isVerified });
+            return res.json({ success: true, guide });
+        }
+        res.status(404).json({ error: "Guide not found" });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to verify guide" });
+    }
+});
+
+// --- APPOINTMENT APIs ---
+
+// API: Book an Appointment
+app.post('/api/appointments/book', async (req, res) => {
+    try {
+        const { userName, userContact, guideContact, guideName, date } = req.body;
+        if (!userName || !userContact || !guideContact || !date) {
+            return res.status(400).json({ error: "Missing required booking details" });
+        }
+
+        const appointment = await Appointment.create({
+            userName, userContact, guideContact, guideName, date
+        });
+
+        console.log(`[BOOKING] New Request: ${userName} -> ${guideName || guideContact} on ${date}`);
+        res.json({ success: true, appointment });
+    } catch (error) {
+        console.error("Booking error:", error);
+        res.status(500).json({ error: "Failed to book appointment" });
+    }
+});
+
+// API: Get Appointments for a Guide
+app.get('/api/appointments/guide/:contact', async (req, res) => {
+    try {
+        const { contact } = req.params;
+        const appointments = await Appointment.findAll({
+            where: { guideContact: contact },
+            order: [['bookedAt', 'DESC']]
+        });
+        res.json(appointments);
+    } catch (error) {
+        console.error("Fetch appointments error:", error);
+        res.status(500).json({ error: "Failed to fetch appointments" });
+    }
+});
+
+// API: Accept/Reject Appointment
+app.post('/api/appointments/update-status', async (req, res) => {
+    try {
+        const { id, status } = req.body;
+        if (!id || !status) {
+            return res.status(400).json({ error: "Booking ID and status required" });
+        }
+
+        const appointment = await Appointment.findByPk(id);
+        if (!appointment) {
+            return res.status(404).json({ error: "Appointment not found" });
+        }
+
+        await appointment.update({ status });
+        console.log(`[BOOKING] Status Updated: ${appointment.id} -> ${status}`);
+        res.json({ success: true, appointment });
+    } catch (error) {
+        console.error("Update appointment error:", error);
+        res.status(500).json({ error: "Failed to update appointment" });
+    }
+});
+
+// API: Get Appointments for a User (to see their bookings)
+app.get('/api/appointments/user/:contact', async (req, res) => {
+    try {
+        const { contact } = req.params;
+        const appointments = await Appointment.findAll({
+            where: { userContact: contact },
+            order: [['bookedAt', 'DESC']]
+        });
+        res.json(appointments);
+    } catch (error) {
+        console.error("Fetch user appointments error:", error);
+        res.status(500).json({ error: "Failed to fetch appointments" });
+    }
+});
+
+// --- GUIDE REVIEW APIs ---
+
+// API: Submit a Review for a Guide
+app.post('/api/reviews/submit', async (req, res) => {
+    try {
+        const { guideContact, guideName, userContact, userName, appointmentId, rating, comment } = req.body;
+        
+        if (!guideContact || !userContact || !rating) {
+            return res.status(400).json({ error: "Guide contact, user contact, and rating are required" });
+        }
+
+        if (rating < 1 || rating > 5) {
+            return res.status(400).json({ error: "Rating must be between 1 and 5" });
+        }
+
+        // Check if user already reviewed this appointment
+        if (appointmentId) {
+            const existingReview = await GuideReview.findOne({ where: { appointmentId } });
+            if (existingReview) {
+                return res.status(400).json({ error: "You have already reviewed this booking" });
+            }
+        }
+
+        const review = await GuideReview.create({
+            guideContact,
+            guideName,
+            userContact,
+            userName,
+            appointmentId,
+            rating,
+            comment
+        });
+
+        // Update guide's average rating
+        const allReviews = await GuideReview.findAll({ where: { guideContact } });
+        const avgRating = allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length;
+        
+        await Guide.update({ rating: avgRating }, { where: { contact: guideContact } });
+
+        console.log(`[REVIEW] New review for ${guideName}: ${rating} stars by ${userName}`);
+        res.json({ success: true, review, avgRating });
+    } catch (error) {
+        console.error("Submit review error:", error);
+        res.status(500).json({ error: "Failed to submit review" });
+    }
+});
+
+// API: Get Reviews for a Guide
+app.get('/api/reviews/guide/:contact', async (req, res) => {
+    try {
+        const { contact } = req.params;
+        const reviews = await GuideReview.findAll({
+            where: { guideContact: contact },
+            order: [['createdAt', 'DESC']]
+        });
+        res.json(reviews);
+    } catch (error) {
+        console.error("Fetch reviews error:", error);
+        res.status(500).json({ error: "Failed to fetch reviews" });
+    }
+});
+
+// API: Check if user can review an appointment
+app.get('/api/reviews/can-review/:appointmentId', async (req, res) => {
+    try {
+        const { appointmentId } = req.params;
+        const existingReview = await GuideReview.findOne({ where: { appointmentId: parseInt(appointmentId) } });
+        res.json({ canReview: !existingReview });
+    } catch (error) {
+        console.error("Check review status error:", error);
+        res.status(500).json({ error: "Failed to check review status" });
+    }
+});
+
+// --- AI Content Generation ---
+app.post('/api/admin/generate-ai-content', async (req, res) => {
+    const { name, location } = req.body;
     
-    // Log Network IP
+    if (!name) {
+        return res.status(400).json({ error: "Temple name is required for AI generation" });
+    }
+
+    if (!process.env.GEMINI_API_KEY) {
+        return res.status(400).json({ 
+            error: "Gemini API Key missing. Please add your key to server/.env as GEMINI_API_KEY=..." 
+        });
+    }
+
+    try {
+        const { GoogleGenerativeAI } = require("@google/generative-ai");
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        
+        // Using Gemni Flash Latest as verified available for this key
+        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+
+        const prompt = `Act as an Expert Spiritual Tour Guide. The user wants to visit the temple "${name}" at "${location}" and wants such detailed information that they DO NOT need to hire a human guide. Be their personal virtual guide.
+        
+        Write it like a DIVINE SACRED STORY (મહાન ધાર્મિક કથા) but also include practical guide-like details.
+        
+        Strictly follow this structure for the JSON fields:
+        1. history (ઈતિહાસ અને કથા): This must be your masterpiece. Cover 'Pragatya' (ભગવાનના પ્રગટ્યની કથા), ancient legends, 'Lokvayka', Royal Connections, AND include "Guide Notes" - specific things a guide would point out (e.g., "Notice this stone...", "Look at this pillar..."). Write in deep Gujarati.
+        2. significance (મહત્વ અને રહસ્યો): Reveal hidden secrets that only local guides know. Explain rituals, mysteries, and spiritual benefits.
+        3. architecture (સ્થાપત્ય દર્શન): Don't just list styles. Walk the user through the temple. "As you enter the main gate...", "Observe the carving on the dome...". Write in Gujarati.
+
+        Provide the response in a JSON format with exactly these fields:
+        {
+          "name_gu": "Temple name in Gujarati",
+          "name_hi": "Temple name in Hindi",
+          "name_en": "Temple name in English",
+          "history": "Comprehensive Guide Script: Pragatya, History, Folklore, and 'Guide-style' tours (પ્રગટ્ય, ઇતિહાસ, લોકવાયકા, અને ગાઈડ જેવી ખાસ માહિતી) in Gujarati",
+          "architecture": "Virtual Architectural Tour (સ્થાપત્ય દર્શન) in Gujarati",
+          "significance": "Hidden Secrets, Rituals & Spiritual Significance (રહસ્યો અને મહત્વ) in Gujarati",
+          "district": "Exact District Name (e.g., Gir Somnath, Devbhumi Dwarka, Kheda, Ahmedabad) in English",
+          "bestTimeToVisit": "Best time to visit (e.g., During Aarti, specific festivals) in Gujarati",
+          "howToReach": "Detailed Travel Guide (કેવી રીતે પહોંચવું) in Gujarati",
+          "nearbyAttractions": "List of nearby attractions INCLUDING Historical Places. Format each as: 'Place Name - Short Description (Distance)'. Write in Gujarati.",
+          "history_en": "Comprehensive History & Guide notes in English",
+          "history_hi": "Comprehensive History & Guide notes in Hindi"
+        }`;
+
+        const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json" }
+        });
+        
+        const response = await result.response;
+        const text = response.text();
+        const generatedData = JSON.parse(text);
+        res.json({ success: true, data: generatedData });
+    } catch (error) {
+        console.error("Gemini Gen Error:", error);
+        res.status(500).json({ error: "Gemini Generation failed: " + error.message });
+    }
+});
+
+// POST: Translate Content
+app.post('/api/translate', async (req, res) => {
+    const { text, targetLang, bulk, contentMap } = req.body;
+    
+    // Support both single and bulk modes
+    if (!targetLang) return res.status(400).json({ error: "Target Language required" });
+    if (!bulk && !text) return res.status(400).json({ error: "Text required" });
+    if (bulk && (!contentMap || Object.keys(contentMap).length === 0)) return res.status(400).json({ error: "Content Map required for bulk mode" });
+
+    try {
+        const { GoogleGenerativeAI } = require("@google/generative-ai");
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        // Using "gemini-1.5-flash-latest" as intended, or fallback to known working one
+        // If "gemini-flash-latest" is what worked for 429, stick with it.
+        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" }); 
+
+        if (bulk) {
+            console.log(`[TRANSLATE BULK] Translating ${Object.keys(contentMap).length} fields to ${targetLang}`);
+            
+            const prompt = `Translate the following JSON values into ${targetLang === 'hi' ? 'Hindi' : 'English'}.
+            Maintain the divine and respectful tone. 
+            Return the result as a raw JSON object with the same keys, and translated values.
+            Do NOT include markdown formatting (like \`\`\`json). Just the raw JSON.
+
+            Input JSON:
+            ${JSON.stringify(contentMap, null, 2)}`;
+
+            const result = await model.generateContent({
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                generationConfig: { responseMimeType: "application/json" }
+            });
+
+            const responseText = result.response.text().trim();
+            // Clean up if markdown is still present despite instructions
+            const cleanJson = responseText.replace(/```json/g, '').replace(/```/g, '');
+            const translatedMap = JSON.parse(cleanJson);
+            
+            console.log(`[TRANSLATE BULK] Success`);
+            res.json({ success: true, translatedMap });
+
+        } else {
+            // Legacy/Single mode
+            console.log(`[TRANSLATE] Translating text (len: ${text.length}) to ${targetLang}`);
+            const prompt = `Translate the following religious/historical text into ${targetLang === 'hi' ? 'Hindi' : 'English'}. 
+            Maintain the divine and respectful tone. Return ONLY the translated text.
+            
+            TEXT: ${text}`;
+
+            const result = await model.generateContent(prompt);
+            console.log(`[TRANSLATE] Success`);
+            res.json({ success: true, translatedText: result.response.text().trim() });
+        }
+    } catch (error) {
+        console.error(`[TRANSLATE ERROR]`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// POST: Generate Spiritual Journey Narrative (Enhanced with ALL place types + Nearby)
+app.post('/api/generate-journey-guide', async (req, res) => {
+    const { origin, destination, lang = 'gu', travelMode = 'road' } = req.body;
+    
+    if (!origin || !destination) {
+        return res.status(400).json({ error: "Origin and Destination are required" });
+    }
+
+    const langName = lang === 'hi' ? 'Hindi' : (lang === 'en' ? 'English' : 'Gujarati');
+    
+    // Mode-specific instructions
+    let modeInstructions = '';
+    if (travelMode === 'road') {
+        modeInstructions = `
+        TRAVEL MODE: BY ROAD (Car/Bus)
+        Focus on:
+        - Highway routes and road conditions
+        - Petrol pumps and rest stops
+        - Roadside restaurants and dhabas
+        - Hotels and lodges on the route
+        - Temples and attractions accessible by road
+        - Traffic points and toll plazas
+        - Scenic viewpoints along the highway
+        `;
+    } else if (travelMode === 'train') {
+        modeInstructions = `
+        TRAVEL MODE: BY TRAIN
+        Focus on:
+        - Railway stations on this route
+        - Train connectivity and major junctions
+        - Famous places near railway stations
+        - Station facilities and waiting rooms
+        - Temples and attractions near stations
+        - Local transport from stations
+        - Food stalls and restaurants at stations
+        `;
+    } else if (travelMode === 'flight') {
+        modeInstructions = `
+        TRAVEL MODE: BY FLIGHT
+        Focus on:
+        - Nearest airports to origin and destination
+        - Airport facilities and lounges
+        - Ground transportation from airports
+        - Major attractions near airports
+        - Hotels near airports
+        - Flight connectivity information
+        - Airport temples and prayer rooms
+        `;
+    }
+
+    try {
+        const { GoogleGenerativeAI } = require("@google/generative-ai");
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+
+        const prompt = `Act as a comprehensive travel and spiritual tour guide for Indian routes. 
+        Analyze the NEAREST/SHORTEST road route from "${origin}" to "${destination}".
+        
+        ${modeInstructions}
+        
+        CRITICAL INSTRUCTIONS FOR ROAD TRAVEL:
+        
+        1. ROUTE SELECTION:
+           - Identify the NEAREST/SHORTEST road route (by distance or time)
+           - Use major highways (NH/SH) that connect these cities
+           - Avoid long detours or alternative routes
+           - Example: રાજકોટ to ભાવનગર might be: રાજકોટ → બબરા → સિહોર → ભાવનગર (via NH-27)
+           
+        2. ROUTE PATH:
+           - Clearly mention the exact route path with highway numbers
+           - List major cities/towns that fall ON this route
+           - Specify the highway/road name (e.g., NH-27, SH-31)
+        
+        3. PLACES TO INCLUDE (15-20 stops):
+           - ONLY places that are DIRECTLY on this nearest route
+           - NO detours or nearby attractions
+           - Focus on practical stops travelers will encounter:
+             * Major cities and towns on route
+             * Petrol pumps on this highway
+             * Restaurants/dhabas on this road
+             * Hotels on this route
+             * Temples that are ON this highway
+             * Rest areas on this road
+             * Toll plazas on this route
+        
+        4. DISTANCE ACCURACY:
+           - Provide accurate distances between stops
+           - Mention cumulative distance from origin
+           - Specify which highway/road each place is on
+        
+        CATEGORIES TO INCLUDE (mix based on travel mode):
+        1. 🛕 Temples & Religious Sites (મંદિરો અને ધાર્મિક સ્થળો)
+        2. 🏛️ Historical Places & Monuments (ઐતિહાસિક સ્થળો)
+        3. 🏘️ Famous Villages & Towns (પ્રસિદ્ધ ગામો અને શહેરો)
+        4. 🍽️ Famous Restaurants & Food Stops (પ્રસિદ્ધ ભોજનાલય)
+        5. ⛽ Petrol Pumps & Rest Areas (પેટ્રોલ પંપ અને આરામ સ્થળો)
+        6. 🏨 Hotels & Lodging (હોટેલ અને રહેવાની વ્યવસ્થા)
+        7. 🌳 Tourist Spots & Natural Beauty (પર્યટન સ્થળો)
+        8. 🛍️ Shopping Areas & Markets (બજારો)
+        9. 🏖️ Beaches & Lakes (બીચ અને તળાવ)
+        10. 🎭 Cultural Centers (સાંસ્કૃતિક કેન્દ્રો)
+        
+        CRITICAL: Provide ALL text content strictly in ${langName} language.
+        
+        For each stop, provide:
+        1. Name: The name of the location
+        2. Category: One of the categories above (emoji + name in ${langName})
+        3. Highway: Which highway/road this place is on (e.g., "NH-27", "SH-31")
+        4. DistanceFromOrigin: Cumulative distance from starting point (e.g., "45 કિમી")
+        5. Story: A detailed narrative about this place - its history, significance, or what makes it special in ${langName}.
+        6. DivineSecret/SpecialTip: For temples: mystical facts. For others: insider tips, best items, timings in ${langName}.
+        7. PracticalInfo: Distance from previous stop, opening hours, contact if applicable in ${langName}.
+        8. TravelersTip: Practical advice for travelers in ${langName}.
+        9. StopSequence: Numbered order from start to end.
+        
+        Format the response as a JSON object:
+        {
+          "routePath": "The nearest route path with highway in ${langName} (e.g., રાજકોટ → બબરા → સિહોર → ભાવનગર via NH-27)",
+          "routeTitle": "A comprehensive title for this journey in ${langName}",
+          "highwayName": "Main highway name (e.g., NH-27, SH-31)",
+          "estimatedDistance": "Approximate road distance in km",
+          "estimatedTime": "Approximate travel time",
+          "stops": [
+            {
+              "name": "Stop Name",
+              "category": "Category with emoji",
+              "highway": "Highway/Road name",
+              "distanceFromOrigin": "Distance from start in ${langName}",
+              "story": "Detailed narrative in ${langName}",
+              "secret": "Special tip or mystical fact in ${langName}",
+              "practicalInfo": "Distance, timings, contact in ${langName}",
+              "tip": "Travel tip in ${langName}",
+              "sequence": 1
+            }
+          ]
+        }`;
+
+        const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json" }
+        });
+        
+        const responseData = JSON.parse(result.response.text());
+        res.json({ 
+            success: true, 
+            journey: responseData.stops, 
+            title: responseData.routeTitle,
+            routePath: responseData.routePath || '',
+            distance: responseData.estimatedDistance,
+            estimatedTime: responseData.estimatedTime || 'Calculating...'
+        });
+    } catch (error) {
+        console.error("Journey Generation Error:", error);
+        res.status(500).json({ error: "Failed to generate journey guide: " + error.message });
+    }
+});
+
+// --- Twilio Setup ---
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
+// API: Initiate Bridge Call (Admin -> Guide)
+// app.post('/api/admin/call-guide', async (req, res) => {
+//     let { adminContact, guideContact } = req.body;
+//     if (!adminContact || !guideContact) return res.status(400).json({ error: "Both numbers required" });
+
+//     try {
+//         // Ensure E.164 format (Assuming India +91 if not present)
+//         if (!adminContact.startsWith('+')) adminContact = '+91' + adminContact.replace(/\D/g, '');
+//         if (!guideContact.startsWith('+')) guideContact = '+91' + guideContact.replace(/\D/g, '');
+
+//         console.log(`[TWILIO] Initiating bridge call: Guide (${guideContact}) -> Admin (${adminContact})`);
+        
+//         // Generate TwiML to Dial the Admin (connect them when Guide answers)
+//         const response = new twilio.twiml.VoiceResponse();
+//         const dial = response.dial({ callerId: process.env.TWILIO_PHONE_NUMBER });
+//         dial.number(adminContact);
+
+//         // Initiate call to Guide FIRST
+//         const call = await twilioClient.calls.create({
+//             twiml: response.toString(),
+//             to: guideContact, // Call the Guide first
+//             from: process.env.TWILIO_PHONE_NUMBER 
+//         });
+        
+//         console.log(`[TWILIO] Call SID: ${call.sid}`);
+//         res.json({ success: true, callSid: call.sid });
+//     } catch (error) {
+//         console.error("Twilio Call Error:", error);
+//         res.status(500).json({ error: error.message });
+//     }
+// });
+
+// API: Initiate Bridge Call (Admin First -> Dial Guide)
+// API: Initiate Bridge Call (Admin First -> Dial Guide)
+app.post('/api/admin/call-guide', async (req, res) => {
+    console.log("req.body---------------->>", JSON.stringify(req.body));
+    let { adminContact, guideContact } = req.body;
+    
+    // Validate required fields
+    if (!guideContact) return res.status(400).json({ error: "Guide number required" });
+    
+    // We NEED an Admin Phone Number to enable conversation
+    if (!adminContact || adminContact.includes('@') || !adminContact.match(/[\d+]{10,}/)) {
+        return res.status(400).json({ 
+            error: "Unable to talk: Your Admin Profile has an Email, not a Phone Number. The system needs a number to call YOU first. Please update your profile." 
+        });
+    }
+
+    try {
+        // Ensure contacts are in E.164 format
+        if (!guideContact.startsWith('+')) guideContact = '+91' + guideContact.replace(/\D/g, '');
+        if (!adminContact.startsWith('+')) adminContact = '+91' + adminContact.replace(/\D/g, '');
+
+        const twilioNumber = process.env.TWILIO_PHONE_NUMBER;
+        
+        console.log(`[TWILIO] Bridge Call: Admin (${adminContact}) -> [Twilio] -> Guide (${guideContact})`);
+        
+        // TwiML Strategy:
+        // 1. System calls Admin.
+        // 2. Admin Answers.
+        // 3. System says "Connecting..."
+        // 4. System <Dial>s the Guide.
+        const response = new twilio.twiml.VoiceResponse();
+        response.say({ language: 'en-IN' }, "Connecting you to the Guide.");
+        
+        const dial = response.dial({ callerId: twilioNumber });
+        dial.number(guideContact);
+        
+        // Initiate the physical call to the ADMIN first
+        const call = await twilioClient.calls.create({
+            twiml: response.toString(),
+            to: adminContact, // Call Your Phone First
+            from: twilioNumber
+        });
+        
+        console.log(`[TWILIO] Call Initiated. SID: ${call.sid}`);
+        res.json({ success: true, callSid: call.sid });
+
+    } catch (error) {
+        console.error("Error initiating Twilio call:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+// POST: Add New Temple
+app.post('/api/admin/add-temple', async (req, res) => {
+    try {
+        const { 
+            state, district, name, name_en, name_hi, description, liveVideoId, location, history,
+            history_en, history_hi, architecture, architecture_en, architecture_hi,
+            significance, significance_en, significance_hi,
+            bestTimeToVisit, howToReach, nearbyAttractions, liveChannelUrl, aartiTimings
+        } = req.body;
+        
+        if (!state || !name) {
+            return res.status(400).json({ error: "Missing required fields" });
+        }
+
+        const temple = await Temple.create({ 
+            state, district, name, name_en, name_hi, description, liveVideoId, location, history,
+            history_en, history_hi, architecture, architecture_en, architecture_hi,
+            significance, significance_en, significance_hi,
+            bestTimeToVisit, howToReach, nearbyAttractions, liveChannelUrl, aartiTimings
+        });
+
+        // Trigger an immediate live check if a channel URL was provided
+        if (liveChannelUrl) {
+            console.log(`[ADMIN] Triggering immediate live check for new temple: ${name}`);
+            checkYouTubeLive(liveChannelUrl, async (videoId) => {
+                if (videoId && videoId !== "PRE-RECORDED_VIDEO_ID") {
+                    await temple.update({ liveVideoId: videoId });
+                    console.log(`[ADMIN] Live ID updated for ${name}: ${videoId}`);
+                }
+            });
+        }
+
+        res.json({ success: true, temple });
+    } catch (error) {
+        console.error("Add Temple error:", error);
+        res.status(500).json({ error: "Failed to add temple: " + error.message });
+    }
+});
+
+// POST: Update Existing Temple
+app.post('/api/admin/update-temple', async (req, res) => {
+    try {
+        const { id, name } = req.body;
+        if (!id && !name) {
+            return res.status(400).json({ error: "Temple ID or Name is required to update" });
+        }
+
+        const updateData = { ...req.body };
+        delete updateData.id;
+
+        // Ensure we don't accidentally wipe fields if the frontend sends partial updates
+        // (Sequelize update handles partials automatically if we pass the object, 
+        // but here we are spreading the whole body. That is fine as long as frontend sends what it wants to update)
+
+        const [updated] = await Temple.update(updateData, {
+             where: id ? { id } : { name }
+        });
+
+        if (updated) {
+            const updatedTemple = await Temple.findOne({ where: id ? { id } : { name } });
+            
+            // Trigger an immediate live check if a channel URL exists/updated
+            if (updatedTemple.liveChannelUrl) {
+                console.log(`[ADMIN] Triggering immediate live check for updated temple: ${updatedTemple.name}`);
+                checkYouTubeLive(updatedTemple.liveChannelUrl, async (videoId) => {
+                    if (videoId && videoId !== "PRE-RECORDED_VIDEO_ID") {
+                        await updatedTemple.update({ liveVideoId: videoId });
+                        console.log(`[ADMIN] Live ID updated for ${updatedTemple.name}: ${videoId}`);
+                    }
+                });
+            }
+
+            return res.json({ success: true, temple: updatedTemple });
+        }
+        res.status(404).json({ error: "Temple not found" });
+    } catch (error) {
+        console.error("Update Temple error:", error);
+        res.status(500).json({ error: "Failed to update temple: " + error.message });
+    }
+});
+
+// POST: Delete Temple
+app.post('/api/admin/delete-temple', async (req, res) => {
+    try {
+        const { id, name } = req.body;
+        if (!id && !name) {
+            return res.status(400).json({ error: "Temple ID or Name is required to delete" });
+        }
+
+        const deleted = await Temple.destroy({
+            where: id ? { id } : { name }
+        });
+
+        if (deleted) {
+            return res.json({ success: true, message: "Temple deleted successfully" });
+        }
+        res.status(404).json({ error: "Temple not found" });
+    } catch (error) {
+        console.error("Delete Temple error:", error);
+        res.status(500).json({ error: "Failed to delete temple: " + error.message });
+    }
+});
+
+app.listen(port, '0.0.0.0', async () => {
+    console.log(`\n--- Somnath Aarti Server (PostgreSQL) ---`);
+    console.log(`Local: http://localhost:${port}`);
+    
+    await initDb();
+    
+    // Initial status check
+    setTimeout(updateAllLiveStatuses, 5000);
+    // Recurring check every 10 mins
+    setInterval(updateAllLiveStatuses, 10 * 60 * 1000);
+
     const { networkInterfaces } = require('os');
     const nets = networkInterfaces();
     for (const name of Object.keys(nets)) {
@@ -582,5 +1497,4 @@ app.listen(port, '0.0.0.0', () => {
             }
         }
     }
-    console.log(`Test API: http://localhost:${port}/api/darshan\n`);
 });

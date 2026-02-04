@@ -30,6 +30,9 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
+    "updates": {
+      "checkAutomatically": "ON_ERROR_RECOVERY"
+    },
     "extra": {
       "eas": {
         "projectId": "YOUR_EXPO_PROJECT_ID_HERE"
