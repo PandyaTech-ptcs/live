@@ -5,12 +5,52 @@ const https = require('https');
 require('dotenv').config();
 const twilio = require('twilio');
 const nodemailer = require('nodemailer');
+const bcrypt = require('bcrypt');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { Upload } = require('@aws-sdk/lib-storage');
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+
+// Serve static files from uploads directory
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
+
+// Configure AWS S3 Client
+const s3Client = new S3Client({
+    region: process.env.AWS_REGION || 'ap-south-1',
+    credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+    }
+});
+
+const S3_BUCKET = process.env.AWS_S3_BUCKET || 'divya-darshan-temples';
+
+// Configure multer for memory storage (for S3 upload)
+const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    fileFilter: function (req, file, cb) {
+        const allowedTypes = /jpeg|jpg|png|gif|webp/;
+        const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+        const mimetype = allowedTypes.test(file.mimetype);
+        if (mimetype && extname) {
+            return cb(null, true);
+        } else {
+            cb(new Error('Only image files are allowed!'));
+        }
+    }
+});
 
 // Request Logger
 app.use((req, res, next) => {
@@ -57,7 +97,8 @@ const Temple = sequelize.define('Temple', {
     bestTimeToVisit: DataTypes.STRING,
     howToReach: DataTypes.TEXT,
     nearbyAttractions: DataTypes.TEXT,
-    aartiTimings: { type: DataTypes.JSONB } // Dynamic timings
+    aartiTimings: { type: DataTypes.JSONB }, // Dynamic timings
+    imageUrl: DataTypes.STRING // Optional temple image
 });
 
 // --- User Model for Login/Registration ---
@@ -400,6 +441,9 @@ app.post('/api/send-otp', async (req, res) => {
         if (type === 'register') {
             const user = await User.findOne({ where: { contact } });
             if (user) return res.status(400).json({ error: "User already registered" });
+        } else if (type === 'forgot') {
+            const user = await User.findOne({ where: { contact } });
+            if (!user) return res.status(404).json({ error: "User not found" });
         }
 
         // Generate 6 digit pin
@@ -462,11 +506,15 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ error: "User already registered. Please login." });
         }
 
+        // Hash password using bcrypt
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+
         // Create user
         const user = await User.create({ 
             name, 
             contact, 
-            password, 
+            password: hashedPassword, 
             wantsToWorkAsGuide: req.body.wantsToWorkAsGuide || false 
         });
         
@@ -506,8 +554,9 @@ app.post('/api/login', async (req, res) => {
             return res.status(404).json({ error: "User not found. Please register." });
         }
 
-        // Check password (In production use bcrypt!)
-        if (user.password !== password) {
+        // Check password using bcrypt
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
             return res.status(401).json({ error: "Incorrect password" });
         }
 
@@ -581,9 +630,22 @@ app.get('/api/darshan', async (req, res) => {
 // API: Reset Password
 app.post('/api/reset-password', async (req, res) => {
     try {
-        const { contact, newPassword } = req.body;
-        if (!contact || !newPassword) {
-            return res.status(400).json({ error: "Missing contact or new password" });
+        const { contact, newPassword, otp } = req.body;
+        if (!contact || !newPassword || !otp) {
+            return res.status(400).json({ error: "Missing contact, OTP or new password" });
+        }
+
+        // Verify OTP
+        const otpRecord = await Otp.findOne({ 
+            where: { 
+                contact, 
+                code: otp,
+                expiresAt: { [Op.gt]: new Date() }
+            } 
+        });
+
+        if (!otpRecord) {
+            return res.status(400).json({ error: "Invalid or expired OTP" });
         }
 
         console.log(`[RESET] Attempt for contact: "${contact}"`);
@@ -593,7 +655,15 @@ app.post('/api/reset-password', async (req, res) => {
             return res.status(404).json({ error: "User not found with this contact" });
         }
 
-        await user.update({ password: newPassword });
+        // Hash new password using bcrypt
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+        
+        await user.update({ password: hashedPassword });
+        
+        // Delete used OTP
+        await otpRecord.destroy();
+
         console.log(`[USER] Password Reset Success for: ${user.name} (${user.contact})`);
         res.json({ success: true, message: "Password updated successfully" });
     } catch (error) {
@@ -677,8 +747,12 @@ app.post('/api/admin/register-user', async (req, res) => {
             return res.status(400).json({ error: "User already registered with this contact." });
         }
 
+        // Hash password using bcrypt
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+
         // Create user with explicit role
-        const user = await User.create({ name, contact, password, role, phoneNumber });
+        const user = await User.create({ name, contact, password: hashedPassword, role, phoneNumber });
         console.log(`[ADMIN] Registered New User: ${user.name} (${user.contact}) as ${role}`);
         res.json({ success: true, user });
     } catch (error) {
@@ -714,7 +788,9 @@ app.put('/api/admin/users/:id', async (req, res) => {
 
         const updates = { name, contact, role, phoneNumber };
         if (password && password.trim() !== '') {
-            updates.password = password;
+            // Hash password using bcrypt
+            const saltRounds = 10;
+            updates.password = await bcrypt.hash(password, saltRounds);
         }
 
         await user.update(updates);
@@ -1181,20 +1257,64 @@ app.post('/api/generate-journey-guide', async (req, res) => {
 
     try {
         const { GoogleGenerativeAI } = require("@google/generative-ai");
+        const axios = require('axios'); // Import axios
+        
+        // 1. Fetch Actual Route from Google Maps (if API Key exists)
+        let googleRouteContext = "";
+        let estimatedDistance = "";
+        let estimatedTime = "";
+        const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+
+        if (GOOGLE_API_KEY && GOOGLE_API_KEY !== 'your_google_maps_api_key_here' && travelMode === 'road') {
+            try {
+                console.log(`[JOURNEY] Fetching Google Maps route: ${origin} -> ${destination}`);
+                const mapsUrl = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&key=${GOOGLE_API_KEY}`;
+                
+                const mapsResponse = await axios.get(mapsUrl);
+                const route = mapsResponse.data.routes[0];
+                
+                if (route && route.legs && route.legs[0]) {
+                    const leg = route.legs[0];
+                    estimatedDistance = leg.distance.text;
+                    estimatedTime = leg.duration.text;
+                    
+                    // Extract major steps/cities
+                    // We can take end_address of major steps to identify cities
+                    const steps = leg.steps;
+                    const routePath = steps.map(s => s.html_instructions.replace(/<[^>]*>/g, '')).join(' -> ');
+                    
+                    googleRouteContext = `
+                    ACTUAL GOOGLE MAPS ROUTE DATA:
+                    - Total Distance: ${estimatedDistance}
+                    - Total Time: ${estimatedTime}
+                    - Route Steps: ${routePath}
+                    
+                    CRITICAL: You MUST follow THIS specific route path. Do NOT invent a different route.
+                    Map the "Stops" to locations mentioned in the Route Steps above.
+                    `;
+                    console.log("[JOURNEY] Google Maps route fetched successfully");
+                }
+            } catch (mapError) {
+                console.error("[JOURNEY] Google Maps API Error (falling back to AI):", mapError.message);
+            }
+        }
+
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        // Using 'gemini-flash-latest' as confirmed by test script
         const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
 
         const prompt = `Act as a comprehensive travel and spiritual tour guide for Indian routes. 
-        Analyze the NEAREST/SHORTEST road route from "${origin}" to "${destination}".
+        Analyze the road route from "${origin}" to "${destination}".
+        
+        ${googleRouteContext}
         
         ${modeInstructions}
         
         CRITICAL INSTRUCTIONS FOR ROAD TRAVEL:
         
         1. ROUTE SELECTION:
-           - Identify the NEAREST/SHORTEST road route (by distance or time)
+           ${googleRouteContext ? "- USE THE GOOGLE MAPS ROUTE PROVIDED ABOVE." : "- Identify the NEAREST/SHORTEST road route (by distance or time)"}
            - Use major highways (NH/SH) that connect these cities
-           - Avoid long detours or alternative routes
            - Example: રાજકોટ to ભાવનગર might be: રાજકોટ → બબરા → સિહોર → ભાવનગર (via NH-27)
            
         2. ROUTE PATH:
@@ -1215,7 +1335,7 @@ app.post('/api/generate-journey-guide', async (req, res) => {
              * Toll plazas on this route
         
         4. DISTANCE ACCURACY:
-           - Provide accurate distances between stops
+           ${estimatedDistance ? `- Total Distance is approx ${estimatedDistance}` : "- Provide accurate distances"}
            - Mention cumulative distance from origin
            - Specify which highway/road each place is on
         
@@ -1228,8 +1348,6 @@ app.post('/api/generate-journey-guide', async (req, res) => {
         6. 🏨 Hotels & Lodging (હોટેલ અને રહેવાની વ્યવસ્થા)
         7. 🌳 Tourist Spots & Natural Beauty (પર્યટન સ્થળો)
         8. 🛍️ Shopping Areas & Markets (બજારો)
-        9. 🏖️ Beaches & Lakes (બીચ અને તળાવ)
-        10. 🎭 Cultural Centers (સાંસ્કૃતિક કેન્દ્રો)
         
         CRITICAL: Provide ALL text content strictly in ${langName} language.
         
@@ -1239,10 +1357,11 @@ app.post('/api/generate-journey-guide', async (req, res) => {
         3. Highway: Which highway/road this place is on (e.g., "NH-27", "SH-31")
         4. DistanceFromOrigin: Cumulative distance from starting point (e.g., "45 કિમી")
         5. Story: A detailed narrative about this place - its history, significance, or what makes it special in ${langName}.
-        6. DivineSecret/SpecialTip: For temples: mystical facts. For others: insider tips, best items, timings in ${langName}.
-        7. PracticalInfo: Distance from previous stop, opening hours, contact if applicable in ${langName}.
-        8. TravelersTip: Practical advice for travelers in ${langName}.
-        9. StopSequence: Numbered order from start to end.
+        6. FamousFor: (NEW) Specifically list famous FOOD items, HANDICRAFTS, or SPECIALTIES of this village/town (e.g., "Bhavnagar Ganthiya", "Sihor Penda"). If not applicable, mention main attraction.
+        7. DivineSecret/SpecialTip: For temples: mystical facts. For others: insider tips, best items, timings in ${langName}.
+        8. PracticalInfo: Distance from previous stop, opening hours, contact if applicable in ${langName}.
+        9. TravelersTip: Practical advice for travelers in ${langName}.
+        10. StopSequence: Numbered order from start to end.
         
         Format the response as a JSON object:
         {
@@ -1258,6 +1377,7 @@ app.post('/api/generate-journey-guide', async (req, res) => {
               "highway": "Highway/Road name",
               "distanceFromOrigin": "Distance from start in ${langName}",
               "story": "Detailed narrative in ${langName}",
+              "famousFor": "Famous food/item/specialty in ${langName}",
               "secret": "Special tip or mystical fact in ${langName}",
               "practicalInfo": "Distance, timings, contact in ${langName}",
               "tip": "Travel tip in ${langName}",
@@ -1374,6 +1494,47 @@ app.post('/api/admin/call-guide', async (req, res) => {
 });
 
 
+// POST: Upload Temple Image to AWS S3
+app.post('/api/admin/upload-temple-image', upload.single('image'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No image file uploaded' });
+        }
+        
+        // Generate unique filename
+        const fileExtension = path.extname(req.file.originalname);
+        const uniqueFilename = `temples/temple-${Date.now()}-${Math.round(Math.random() * 1E9)}${fileExtension}`;
+        
+        // Upload to S3
+        const uploadParams = {
+            Bucket: S3_BUCKET,
+            Key: uniqueFilename,
+            Body: req.file.buffer,
+            ContentType: req.file.mimetype,
+            // ACL line removed - Bucket Usage Policy handles public access
+        };
+        
+        console.log(`[ADMIN] Uploading image to S3: ${uniqueFilename}`);
+        
+        const command = new PutObjectCommand(uploadParams);
+        await s3Client.send(command);
+        
+        // Construct S3 URL
+        const imageUrl = `https://${S3_BUCKET}.s3.${process.env.AWS_REGION || 'ap-south-1'}.amazonaws.com/${uniqueFilename}`;
+        
+        console.log(`[ADMIN] Image uploaded successfully: ${imageUrl}`);
+        
+        res.json({ 
+            success: true, 
+            imageUrl: imageUrl,
+            filename: uniqueFilename
+        });
+    } catch (error) {
+        console.error('Image upload error:', error);
+        res.status(500).json({ error: 'Failed to upload image to S3: ' + error.message });
+    }
+});
+
 // POST: Add New Temple
 app.post('/api/admin/add-temple', async (req, res) => {
     try {
@@ -1381,7 +1542,7 @@ app.post('/api/admin/add-temple', async (req, res) => {
             state, district, name, name_en, name_hi, description, liveVideoId, location, history,
             history_en, history_hi, architecture, architecture_en, architecture_hi,
             significance, significance_en, significance_hi,
-            bestTimeToVisit, howToReach, nearbyAttractions, liveChannelUrl, aartiTimings
+            bestTimeToVisit, howToReach, nearbyAttractions, liveChannelUrl, aartiTimings, imageUrl
         } = req.body;
         
         if (!state || !name) {
@@ -1392,7 +1553,7 @@ app.post('/api/admin/add-temple', async (req, res) => {
             state, district, name, name_en, name_hi, description, liveVideoId, location, history,
             history_en, history_hi, architecture, architecture_en, architecture_hi,
             significance, significance_en, significance_hi,
-            bestTimeToVisit, howToReach, nearbyAttractions, liveChannelUrl, aartiTimings
+            bestTimeToVisit, howToReach, nearbyAttractions, liveChannelUrl, aartiTimings, imageUrl
         });
 
         // Trigger an immediate live check if a channel URL was provided

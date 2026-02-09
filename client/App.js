@@ -14,6 +14,7 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import * as Speech from 'expo-speech';
 import * as Location from 'expo-location';
 import { WebView } from 'react-native-webview';
+import * as ImagePicker from 'expo-image-picker';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -27,7 +28,7 @@ Notifications.setNotificationHandler({
 
 // Bypass firewall issues by using the public tunnel URL
 // 1. USE LAN IP (Most Stable)
-const API_URL = 'https://4c5e1d913015.ngrok-free.app/api/temples';
+const API_URL = 'https://17fd-103-105-235-239.ngrok-free.app/api/temples';
 
 
 
@@ -61,18 +62,13 @@ const AuthScreen = ({ onLogin }) => {
             return;
         }
 
-        if (mode === 'forgot') {
-            handleResetPassword();
-            return;
-        }
-
         if (!password.trim()) {
             Alert.alert("Error", "Please enter password");
             return;
         }
 
-        if (mode === 'register') {
-            if (!name.trim()) {
+        if (mode === 'register' || mode === 'forgot') {
+            if (mode === 'register' && !name.trim()) {
                 Alert.alert("Error", "Please enter your name");
                 return;
             }
@@ -82,7 +78,36 @@ const AuthScreen = ({ onLogin }) => {
             }
         }
 
-        // --- NEW OTP LOGIC START ---
+        // --- DIRECT LOGIN (No OTP) ---
+        if (mode === 'login') {
+            setIsAuthLoading(true);
+            try {
+                const loginUrl = API_URL.replace('temples', 'login');
+                const response = await fetch(loginUrl, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'ngrok-skip-browser-warning': 'true'
+                    },
+                    body: JSON.stringify({ contact: contact.trim(), password })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    onLogin(data.user);
+                } else {
+                    Alert.alert("Login Failed", data.error || "Please try again");
+                }
+            } catch (error) {
+                console.error("Login request failed:", error);
+                Alert.alert("Error", "Login failed: " + error.message);
+            } finally {
+                setIsAuthLoading(false);
+            }
+            return;
+        }
+
+        // --- OTP LOGIC (Register & Forgot) ---
         if (authStep === 'initial') {
             setIsAuthLoading(true);
             try {
@@ -98,9 +123,20 @@ const AuthScreen = ({ onLogin }) => {
                     setTimer(60);
                     Alert.alert("Verification", `OTP has been sent to ${contact.trim()}`);
                 } else {
-                    Alert.alert("Error", data.error || "Failed to send OTP");
+                    if (data.error === "User not found") {
+                        Alert.alert(
+                            "યુઝર મળ્યા નથી",
+                            "આ નંબર રજીસ્ટર થયેલ નથી. મહેરબાની કરીને પહેલા રજીસ્ટ્રેશન કરો.",
+                            [
+                                { text: "OK", onPress: () => { setMode('register'); setAuthStep('initial'); } }
+                            ]
+                        );
+                    } else {
+                        Alert.alert("Error", data.error || "Failed to send OTP");
+                    }
                 }
             } catch (error) {
+                console.error("OTP send error:", error);
                 Alert.alert("Connection Error", "System failed to send OTP.");
             } finally {
                 setIsAuthLoading(false);
@@ -116,6 +152,34 @@ const AuthScreen = ({ onLogin }) => {
 
         setIsAuthLoading(true);
         try {
+            // Special Flow for Forgot Password (Verify + Reset in one go)
+            if (mode === 'forgot') {
+                const resetUrl = API_URL.replace('temples', 'reset-password');
+                const response = await fetch(resetUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+                    body: JSON.stringify({ 
+                        contact: contact.trim(), 
+                        newPassword: password,
+                        otp: otp 
+                    })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    Alert.alert("Success", "Password reset successfully. Please login.");
+                    setMode('login');
+                    setAuthStep('initial');
+                    setPassword('');
+                    setConfirmPassword('');
+                    setOtp('');
+                } else {
+                    Alert.alert("Reset Failed", data.error || "Failed to reset password");
+                }
+                return;
+            }
+
+            // Standard Verify for Register
             const verifyOtpUrl = API_URL.replace('temples', 'verify-otp');
             const verifyRes = await fetch(verifyOtpUrl, {
                 method: 'POST',
@@ -130,20 +194,17 @@ const AuthScreen = ({ onLogin }) => {
                 return;
             }
 
-            // OTP Verified! Now proceed to actual login/register
-            const apiEndpoint = mode === 'login' ? 'login' : 'register';
-            const body = mode === 'login' 
-                ? { contact: contact.trim(), password } 
-                : { 
-                    name: name.trim(), 
-                    contact: contact.trim(), 
-                    password,
-                    wantsToWorkAsGuide 
-                  };
+            // OTP Verified! Now proceed to actual register
+            const body = { 
+                name: name.trim(), 
+                contact: contact.trim(), 
+                password,
+                wantsToWorkAsGuide 
+            };
 
-            const loginUrl = API_URL.replace('temples', apiEndpoint);
+            const registerUrl = API_URL.replace('temples', 'register');
             
-            const response = await fetch(loginUrl, {
+            const response = await fetch(registerUrl, {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
@@ -156,7 +217,7 @@ const AuthScreen = ({ onLogin }) => {
             if (data.success) {
                 onLogin(data.user);
             } else {
-                Alert.alert(`${mode === 'login' ? 'Login' : 'Registration'} Failed`, data.error || "Please try again");
+                Alert.alert("Registration Failed", data.error || "Please try again");
                 setAuthStep('initial'); // Reset on failure
             }
         } catch (error) {
@@ -167,44 +228,7 @@ const AuthScreen = ({ onLogin }) => {
         }
     };
 
-    const handleResetPassword = async () => {
-        if (!password.trim() || password !== confirmPassword) {
-            Alert.alert("Error", "Passwords must match and cannot be empty");
-            return;
-        }
 
-        setIsAuthLoading(true);
-        try {
-            const resetUrl = API_URL.replace('temples', 'reset-password');
-            const response = await fetch(resetUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
-                body: JSON.stringify({ contact: contact.trim(), newPassword: password })
-            });
-
-            const data = await response.json();
-            if (data.success) {
-                Alert.alert("Success", "Password reset successfully. Please login.");
-                setMode('login');
-                setPassword('');
-                setConfirmPassword('');
-            } else if (data.error && data.error.includes("not found")) {
-                Alert.alert(
-                    "યુઝર મળ્યા નથી",
-                    "આ નંબર રજીસ્ટર થયેલ નથી. મહેરબાની કરીને પહેલા રજીસ્ટ્રેશન કરો.",
-                    [
-                        { text: "OK", onPress: () => setMode('register') }
-                    ]
-                );
-            } else {
-                Alert.alert("Error", data.error || "Failed to reset password");
-            }
-        } catch (error) {
-            Alert.alert("Error", "Server connection failed: " + error.message);
-        } finally {
-            setIsAuthLoading(false);
-        }
-    };
 
     return (
         <View style={styles.loginWrapper}>
@@ -666,7 +690,8 @@ export default function App() {
     history_hi: '',
     suggestionId: null,
     liveChannelUrl: '',
-    aartiTimings: ''
+    aartiTimings: '',
+    imageUrl: '' // Temple image URL
   });
   
   // Admin Registration State
@@ -682,6 +707,7 @@ export default function App() {
   const [adminUsers, setAdminUsers] = useState([]); // List of users for management
   const [isAdminLoading, setIsAdminLoading] = useState(false);
   const [isAiGenerating, setIsAiGenerating] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [showAdminPassword, setShowAdminPassword] = useState(false);
   
   // Hook must be at the top level
@@ -1400,7 +1426,7 @@ export default function App() {
             setNewTemple({ 
                 state: 'ગુજરાત', name: '', description: '', liveVideoId: '', location: '', history: '',
                 architecture: '', significance: '', bestTimeToVisit: '', howToReach: '', nearbyAttractions: '',
-                history_en: '', history_hi: '', suggestionId: null, liveChannelUrl: ''
+                history_en: '', history_hi: '', suggestionId: null, liveChannelUrl: '', aartiTimings: '', imageUrl: ''
             });
             // If we were editing, maybe close tab or something? App logic stays on tab but clears form.
              if (isUpdate) {
@@ -1413,6 +1439,72 @@ export default function App() {
         }
     } catch (e) { Alert.alert("Error", "Network request failed"); }
     finally { setIsAdminLoading(false); fetchTemples(); }
+  };
+
+  const handleImagePick = async () => {
+    try {
+        // Request permission
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') {
+            Alert.alert('Permission Denied', 'We need camera roll permissions to upload images.');
+            return;
+        }
+
+        // Pick image
+        const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsEditing: true,
+            aspect: [4, 3],
+            quality: 0.8,
+        });
+
+        if (!result.canceled && result.assets && result.assets[0]) {
+            const imageUri = result.assets[0].uri;
+            await uploadTempleImage(imageUri);
+        }
+    } catch (error) {
+        Alert.alert('Error', 'Failed to pick image: ' + error.message);
+    }
+  };
+
+  const uploadTempleImage = async (imageUri) => {
+    setIsUploadingImage(true);
+    try {
+        // Create form data
+        const formData = new FormData();
+        const filename = imageUri.split('/').pop();
+        const match = /\.(\ w+)$/.exec(filename);
+        const type = match ? `image/${match[1]}` : 'image/jpeg';
+
+        formData.append('image', {
+            uri: imageUri,
+            name: filename,
+            type: type
+        });
+
+        // Upload to server
+        const baseUrl = API_URL.replace('/api/temples', '');
+        const response = await fetch(`${baseUrl}/api/admin/upload-temple-image`, {
+            method: 'POST',
+            headers: {
+                'ngrok-skip-browser-warning': 'true',
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            // S3 returns full URL, no need to prepend server URL
+            setNewTemple(prev => ({ ...prev, imageUrl: data.imageUrl }));
+            Alert.alert('Success', 'Image uploaded to AWS S3 successfully!');
+        } else {
+            Alert.alert('Error', data.error || 'Failed to upload image');
+        }
+    } catch (error) {
+        Alert.alert('Error', 'Network error: ' + error.message);
+    } finally {
+        setIsUploadingImage(false);
+    }
   };
 
   const handleDeleteTemple = async (temple) => {
@@ -1703,7 +1795,9 @@ export default function App() {
         history_en: '',
         history_hi: '',
         suggestionId: suggestion.id,
-        liveChannelUrl: ''
+        liveChannelUrl: '',
+        aartiTimings: '',
+        imageUrl: ''
     });
     setActiveAdminTab('addTemple');
     Alert.alert("Form Pre-filled", "Temple name has been set. Use '✨ Generate' to auto-complete the rest!");
@@ -2499,7 +2593,15 @@ export default function App() {
                                     onPress={() => { setSelectedTemple({ ...temple, district: temple.district || districtGroup.district }); setIsGuideExpanded(false); }}
                                 >
                                     <View style={styles.templeIcon}>
-                                        <Text style={styles.templeIconText}>🕉️</Text>
+                                        {temple.imageUrl ? (
+                                            <Image 
+                                                source={{ uri: temple.imageUrl }} 
+                                                style={styles.templeImage}
+                                                resizeMode="cover"
+                                            />
+                                        ) : (
+                                            <Text style={styles.templeIconText}>🕉️</Text>
+                                        )}
                                     </View>
                                     <View style={styles.templeInfo}>
                                         <Text style={styles.templeName}>
@@ -2534,7 +2636,15 @@ export default function App() {
                             onPress={() => { setSelectedTemple({ ...temple, district: temple.district || stateGroup.state }); setIsGuideExpanded(false); }}
                         >
                             <View style={styles.templeIcon}>
-                                <Text style={styles.templeIconText}>🕉️</Text>
+                                {temple.imageUrl ? (
+                                    <Image 
+                                        source={{ uri: temple.imageUrl }} 
+                                        style={styles.templeImage}
+                                        resizeMode="cover"
+                                    />
+                                ) : (
+                                    <Text style={styles.templeIconText}>🕉️</Text>
+                                )}
                             </View>
                             <View style={styles.templeInfo}>
                                 <Text style={styles.templeName}>
@@ -3656,6 +3766,14 @@ export default function App() {
                                             <Text style={{fontSize: 19, fontWeight: 'bold', color: '#1e293b', marginBottom: 12}}>{step.name}</Text>
                                             <Text style={{fontSize: 15, color: '#334155', lineHeight: 24}}>{step.story}</Text>
                                             
+                                            {/* Famous For Section */}
+                                            {step.famousFor && (
+                                                <View style={{marginTop: 12, padding: 12, backgroundColor: '#FFF7ED', borderRadius: 12, borderWidth: 1, borderColor: '#FED7AA'}}>
+                                                    <Text style={{fontWeight: '900', color: '#C2410C', fontSize: 13, marginBottom: 6}}>🌟 FAMOUS FOR</Text>
+                                                    <Text style={{fontSize: 14, color: '#9A3412', lineHeight: 22, fontWeight: '500'}}>{step.famousFor}</Text>
+                                                </View>
+                                            )}
+
                                             {/* Practical Info */}
                                             {step.practicalInfo && (
                                                 <View style={{marginTop: 12, padding: 12, backgroundColor: '#F0FDF4', borderRadius: 12, borderWidth: 1, borderColor: '#BBF7D0'}}>
@@ -3992,6 +4110,35 @@ export default function App() {
                                 <TextInput style={styles.premiumAdminInput} placeholder="Exact Location" value={newTemple.location} onChangeText={v => setNewTemple({...newTemple, location: v})} />
                                 <TextInput style={styles.premiumAdminInput} placeholder="YouTube Video ID (Optional)" value={newTemple.liveVideoId} onChangeText={v => setNewTemple({...newTemple, liveVideoId: v})} />
                                 <TextInput style={styles.premiumAdminInput} placeholder="YouTube Channel URL (e.g. /@Channel/live)" value={newTemple.liveChannelUrl} onChangeText={v => setNewTemple({...newTemple, liveChannelUrl: v})} />
+                                
+                                {/* Image Upload Section */}
+                                <View style={styles.imageUploadSection}>
+                                    <Text style={styles.imageUploadLabel}>Temple Image (Optional)</Text>
+                                    <TouchableOpacity 
+                                        style={[styles.imageUploadBtn, isUploadingImage && {opacity: 0.6}]}
+                                        onPress={handleImagePick}
+                                        disabled={isUploadingImage}
+                                    >
+                                        <Text style={styles.imageUploadBtnText}>
+                                            {isUploadingImage ? "📤 Uploading..." : newTemple.imageUrl ? "✅ Change Image" : "📷 Upload Image"}
+                                        </Text>
+                                    </TouchableOpacity>
+                                    {newTemple.imageUrl && (
+                                        <View style={styles.imagePreviewContainer}>
+                                            <Image 
+                                                source={{ uri: newTemple.imageUrl }} 
+                                                style={styles.imagePreview}
+                                                resizeMode="cover"
+                                            />
+                                            <TouchableOpacity 
+                                                style={styles.removeImageBtn}
+                                                onPress={() => setNewTemple({...newTemple, imageUrl: ''})}
+                                            >
+                                                <Text style={styles.removeImageText}>❌ Remove</Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                    )}
+                                </View>
                             </View>
 
                             <View style={styles.formSection}>
@@ -4423,6 +4570,11 @@ const styles = StyleSheet.create({
   },
   templeIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFF0E0', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
   templeIconText: { fontSize: 20 },
+  templeImage: { 
+    width: 40, 
+    height: 40, 
+    borderRadius: 20,
+  },
   templeInfo: { flex: 1 },
   templeName: { fontSize: 16, fontWeight: '600', color: '#333' },
   templeLocation: { fontSize: 12, color: '#666', marginTop: 2 },
@@ -4859,6 +5011,42 @@ const styles = StyleSheet.create({
   mainSubmitBtn: { height: 55, borderRadius: 15, overflow: 'hidden', marginTop: 10, elevation: 4 },
   submitBtnGradient: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   submitBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16, letterSpacing: 0.5 },
+  
+  // Image Upload Styles
+  imageUploadSection: { marginTop: 15, marginBottom: 10 },
+  imageUploadLabel: { fontSize: 14, fontWeight: '600', color: '#64748b', marginBottom: 8 },
+  imageUploadBtn: { 
+    backgroundColor: '#3b82f6', 
+    padding: 14, 
+    borderRadius: 12, 
+    alignItems: 'center',
+    marginBottom: 12
+  },
+  imageUploadBtnText: { color: '#fff', fontWeight: '600', fontSize: 14 },
+  imagePreviewContainer: { 
+    marginTop: 10, 
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    padding: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0'
+  },
+  imagePreview: { 
+    width: 200, 
+    height: 150, 
+    borderRadius: 12,
+    marginBottom: 10
+  },
+  removeImageBtn: { 
+    backgroundColor: '#fee2e2', 
+    paddingHorizontal: 20, 
+    paddingVertical: 8, 
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fca5a5'
+  },
+  removeImageText: { color: '#dc2626', fontWeight: '600', fontSize: 13 },
   
   emptyContainer: { padding: 50, alignItems: 'center' },
   emptyIcon: { fontSize: 50, marginBottom: 15 },
