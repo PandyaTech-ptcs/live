@@ -8,12 +8,12 @@ import * as Device from 'expo-device';
 // Set notification handler
 LogBox.ignoreAllLogs();
 LogBox.ignoreLogs(['expo-notifications: Android Push notifications']);
-import YoutubePlayer from 'react-native-youtube-iframe';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import * as Speech from 'expo-speech';
 import * as Location from 'expo-location';
 import { WebView } from 'react-native-webview';
+import YoutubePlayer from 'react-native-youtube-iframe';
 import * as ImagePicker from 'expo-image-picker';
 
 Notifications.setNotificationHandler({
@@ -28,7 +28,7 @@ Notifications.setNotificationHandler({
 
 // Bypass firewall issues by using the public tunnel URL
 // 1. USE LAN IP (Most Stable)
-const API_URL = 'https://17fd-103-105-235-239.ngrok-free.app/api/temples';
+const API_URL = 'https://74e4-103-105-235-239.ngrok-free.app/api/temples';
 
 
 
@@ -454,6 +454,20 @@ const TRANSLATIONS = {
     templeDetails: "મંદિર વિગતો",
     noTemplesFound: "કોઈ મંદિરો મળ્યા નહીં",
     refreshing: "તાજું કરી રહ્યું છે...",
+    myProfile: "મારી પ્રોફાઇલ",
+    spiritualJourney: "આધ્યાત્મિક યાત્રા",
+    aboutUs: "અમારા વિશે",
+    shareApp: "એપ શેર કરો",
+    donation: "દાન",
+    suggestions: "સૂચનો",
+    becomeGuide: "ગાઈડ બનો",
+    rateUs: "અમને રેટ કરો",
+    findGuide: "આ મંદિર માટે લોકલ ગાઈડ શોધો",
+    fullScreen: "આખી સ્ક્રીન",
+    exitFull: "સ્ક્રીનમાંથી બહાર નીકળો",
+    localStories: "સ્થાનિક કથાઓ",
+    hiddenGems: "છુપાયેલા રહસ્યો",
+    myBookings: "મારા બુકિંગ",
   },
   hi: { // Hindi
     appName: "दिव्य दर्शन",
@@ -482,6 +496,20 @@ const TRANSLATIONS = {
     templeDetails: "मंदिर विवरण",
     noTemplesFound: "कोई मंदिर नहीं मिला",
     refreshing: "ताज़ा हो रहा है...",
+    myProfile: "मेरी प्रोफाइल",
+    spiritualJourney: "आध्यात्मिक यात्रा",
+    aboutUs: "हमारे बारे में",
+    shareApp: "ऐप शेयर करें",
+    donation: "दान",
+    suggestions: "सुझाव",
+    becomeGuide: "गाइड बनें",
+    rateUs: "हमें रेट करें",
+    findGuide: "इस मंदिर के लिए स्थानीय गाइड खोजें",
+    fullScreen: "पूर्ण स्क्रीन",
+    exitFull: "पूर्ण स्क्रीन से बाहर निकलें",
+    localStories: "स्थानीय कथाएँ",
+    hiddenGems: "छिपे हुए रहस्य",
+    myBookings: "मेरी बुकिंग",
   },
   en: { // English
     appName: "Divine Darshan",
@@ -510,6 +538,18 @@ const TRANSLATIONS = {
     templeDetails: "Temple Details",
     noTemplesFound: "No Temples Found",
     refreshing: "Refreshing...",
+    myProfile: "My Profile",
+    spiritualJourney: "Spiritual Journey",
+    aboutUs: "About Us",
+    shareApp: "Share App",
+    donation: "Donation",
+    suggestions: "Suggestions",
+    becomeGuide: "Become a Guide",
+    rateUs: "Rate Us",
+    findGuide: "Find Local Guide For This temple",
+    fullScreen: "Full Screen",
+    exitFull: "Exit Full Screen",
+    myBookings: "My Bookings",
   }
 };
 
@@ -607,6 +647,8 @@ export default function App() {
   const [journeyRoutePath, setJourneyRoutePath] = useState('');
   const [journeyDistance, setJourneyDistance] = useState('');
   const [journeyEstimatedTime, setJourneyEstimatedTime] = useState('');
+  const [journeyTravelOptions, setJourneyTravelOptions] = useState([]);
+  const [journeyDestinationPlan, setJourneyDestinationPlan] = useState(null);
   const [travelMode, setTravelMode] = useState('road'); // 'road', 'train', or 'flight'
   const [isJourneyLoading, setIsJourneyLoading] = useState(false);
   const [reminders, setReminders] = useState([]); // List of temple names with reminders
@@ -643,7 +685,8 @@ export default function App() {
       experience: '',
       languages: '',
       bio: '',
-      hourlyRate: ''
+      hourlyRate: '',
+      upiId: ''
   });
   const [isRegisteringGuide, setIsRegisteringGuide] = useState(false);
   
@@ -705,6 +748,8 @@ export default function App() {
   });
   
   const [adminUsers, setAdminUsers] = useState([]); // List of users for management
+  const [adminEarnings, setAdminEarnings] = useState({ stats: {}, history: [] });
+  const [guideWallet, setGuideWallet] = useState({ balance: 0, limit: 500, isBlocked: false });
   const [isAdminLoading, setIsAdminLoading] = useState(false);
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
@@ -788,6 +833,132 @@ export default function App() {
       } catch (e) {
           Alert.alert("Error", "Failed to update appointment status");
       }
+  };
+
+  const handleConfirmPayment = async (id) => {
+      try {
+          const url = API_URL.replace('/temples', '/appointments/mark-paid');
+          const response = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+              body: JSON.stringify({ id })
+          });
+          const data = await response.json();
+          if (data.success) {
+              fetchGuideAppointments();
+              Alert.alert("Success", "Payment confirmed successfully!");
+          }
+      } catch (e) {
+          Alert.alert("Error", "Failed to confirm payment");
+      }
+  };
+
+  const fetchAdminEarnings = async () => {
+      setIsAdminLoading(true);
+      try {
+          const url = API_URL.replace('/temples', '/admin/earnings');
+          const response = await fetch(url, { headers: { 'ngrok-skip-browser-warning': 'true' } });
+          const data = await response.json();
+          if (data.success) {
+              setAdminEarnings({ stats: data.stats, history: data.history });
+          }
+      } catch (e) { console.error("Error fetching earnings:", e); }
+      finally { setIsAdminLoading(false); }
+  };
+
+  const handleMarkCommissionReceived = async (id) => {
+      try {
+          const url = API_URL.replace('/temples', '/admin/mark-commission-received');
+          const response = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+              body: JSON.stringify({ id })
+          });
+          const data = await response.json();
+          if (data.success) {
+              fetchAdminEarnings();
+              Alert.alert("Success", "Commission marked as received!");
+          }
+      } catch (e) { Alert.alert("Error", "Action failed"); }
+  };
+
+  const fetchGuideWallet = async () => {
+    if (!user || !user.wantsToWorkAsGuide) return;
+    try {
+        const url = API_URL.replace('/temples', `/guide/wallet/${user.contact}`);
+        const response = await fetch(url, { headers: { 'ngrok-skip-browser-warning': 'true' } });
+        const data = await response.json();
+        if (data.success) {
+            setGuideWallet({ 
+                commissionBalance: data.commissionBalance, 
+                withdrawableBalance: data.withdrawableBalance,
+                limit: data.limit, 
+                isBlocked: data.isBlocked 
+            });
+        }
+    } catch (e) { console.log("Wallet fetch error"); }
+  };
+
+  const handleRequestPayout = async () => {
+    try {
+        const url = API_URL.replace('/temples', '/guide/request-payout');
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+            body: JSON.stringify({ contact: user.contact })
+        });
+        const data = await response.json();
+        if (data.success) {
+            Alert.alert("Success", `Withdrawal request for ₹${data.amount} sent! Admin will transfer to your UPI ID: ${user.upiId || 'not set'}`);
+            fetchGuideWallet();
+        }
+    } catch (e) { Alert.alert("Error", "Payout request failed"); }
+  };
+
+  const handleConfirmUserPayment = async (id) => {
+    try {
+        const url = API_URL.replace('/temples', '/admin/confirm-user-payment');
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+            body: JSON.stringify({ id })
+        });
+        const data = await response.json();
+        if (data.success) {
+            fetchAdminEarnings();
+            Alert.alert("Success", "Payment confirmed and funds released to guide!");
+        }
+    } catch (e) { Alert.alert("Error", "Confirmation failed"); }
+  };
+
+  const handleSettleDues = async (amount) => {
+    try {
+        // Step 1: Trigger UPI Payment to Admin (using fixed admin UPI)
+        const adminUpi = "6353455902@ptsbi"; 
+        const url = `upi://pay?pa=${adminUpi}&pn=DVN%20Admin&tn=Guide%20Commission%20Settlement&am=${amount}&cu=INR`;
+        
+        const supported = await Linking.canOpenURL(url);
+        if (supported) {
+            await Linking.openURL(url);
+            
+            Alert.alert(
+                "Payment Sent?", 
+                "If you successfully paid the admin, click confirm to clear your balance.",
+                [{ 
+                    text: "Confirmed", 
+                    onPress: async () => {
+                        const settleUrl = API_URL.replace('/temples', '/guide/settle-dues');
+                        await fetch(settleUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+                            body: JSON.stringify({ contact: user.contact, amount })
+                        });
+                        fetchGuideWallet();
+                    }
+                }, { text: "Cancel" }]
+            );
+        }
+    } catch (e) { Alert.alert("Error", "Could not initiate payment"); }
   };
 
   const handleSubmitReview = async () => {
@@ -893,8 +1064,8 @@ export default function App() {
   };
 
   const handleRegisterGuide = async () => {
-    if (!guideFormData.name || !guideFormData.contact || !guideFormData.district) {
-        Alert.alert("Error", "મહેરબાની કરીને નામ, સંપર્ક અને જિલ્લો ભરો.");
+    if (!guideFormData.name || !guideFormData.contact || !guideFormData.district || !guideFormData.hourlyRate || !guideFormData.upiId) {
+        Alert.alert("Error", "મહેરબાની કરીને નામ, સંપર્ક, જિલ્લો, ભાવ અને UPI ID બધી વિગતો ભરો.");
         return;
     }
 
@@ -1017,7 +1188,9 @@ export default function App() {
                 userContact: user.contact,
                 guideContact: selectedGuideForBooking?.contact,
                 guideName: selectedGuideForBooking?.name,
-                date: bookingDate
+                guideUpiId: selectedGuideForBooking?.upiId,
+                date: bookingDate,
+                amount: parseInt(selectedGuideForBooking?.hourlyRate?.replace(/[^0-9]/g, '') || '0')
             })
         });
 
@@ -1251,7 +1424,7 @@ export default function App() {
                 district: data.data.district || prev.district,
                 bestTimeToVisit: data.data.bestTimeToVisit,
                 howToReach: data.data.howToReach,
-                nearbyAttractions: data.data.nearbyAttractions,
+                nearbyAttractions: Array.isArray(data.data.nearbyAttractions) ? data.data.nearbyAttractions.join('\n') : data.data.nearbyAttractions,
                 history_en: data.data.history_en,
                 history_hi: data.data.history_hi
             }));
@@ -1563,6 +1736,7 @@ export default function App() {
     setIsMenuVisible(false);
     setIsAdminVisible(true);
     fetchAdminSuggestions();
+    fetchAdminEarnings();
   };
   const toggleSpeech = (text) => {
     if (isSpeaking) {
@@ -1683,6 +1857,8 @@ export default function App() {
         setJourneyRoutePath(data.routePath || '');
         setJourneyDistance(data.distance);
         setJourneyEstimatedTime(data.estimatedTime || 'Calculating...');
+        setJourneyTravelOptions(data.travelOptions || []);
+        setJourneyDestinationPlan(data.destinationPlan || null);
       } else {
         Alert.alert("Error", data.error || "Failed to generate guide");
       }
@@ -1691,7 +1867,32 @@ export default function App() {
     } finally {
       setIsJourneyLoading(false);
     }
-  };  const handleAutoTranslate = async () => {
+  };  const handleGuidePayment = async (appointment) => {
+    // Admin UPI ID - All online payments go here first
+    const adminUpi = "6353455902@ptsbi"; 
+
+    const upiUrl = `upi://pay?pa=${adminUpi}&pn=${encodeURIComponent('DVN Admin')}&tn=${encodeURIComponent('Booking Fee: ' + (appointment.guideName || 'Guide'))}&am=${appointment.amount}&cu=INR`;
+
+    try {
+        const supported = await Linking.canOpenURL(upiUrl);
+        if (supported) {
+            await Linking.openURL(upiUrl);
+            
+            // Inform user that admin needs to confirm
+            Alert.alert(
+                "Payment Sent! 💳", 
+                "તમારું પેમેન્ટ એડમિનને મોકલવામાં આવ્યું છે. એડમિન ચેક કરીને કન્ફર્મ કરશે એટલે ગાઈડને તેની જાણ થશે અને તમારું સ્ટેટસ PAID થઈ જશે.",
+                [{ text: "OK" }]
+            );
+        } else {
+            Alert.alert("Error", "No UPI app found on your phone.");
+        }
+    } catch (error) {
+        Alert.alert("Error", "Could not initiate payment");
+    }
+  };
+
+  const handleAutoTranslate = async () => {
     if (!selectedTemple) return;
     
     setIsTranslating(true);
@@ -1924,6 +2125,12 @@ export default function App() {
   };
 
   const handleLogout = () => {
+      if (!user) {
+          setIsLoggedIn(false);
+          setIsProfileVisible(false);
+          setIsMenuVisible(false);
+          return;
+      }
       Alert.alert(
         "Logout",
         "Are you sure you want to logout?",
@@ -1949,6 +2156,7 @@ export default function App() {
           setEditName(user.name);
           setEditPhone(user.phoneNumber || '');
           setIsProfileVisible(true);
+          fetchGuideWallet(); // Load wallet data if user is a guide
       } else {
           Alert.alert(
               "લોગિન જરૂરી છે",
@@ -2213,6 +2421,30 @@ export default function App() {
                                         </TouchableOpacity>
                                     </View>
                                 )}
+
+                                {item.status === 'accepted' && item.paymentStatus === 'pending' && (
+                                    <TouchableOpacity 
+                                        style={[styles.smallBtn, {backgroundColor: '#2196F3', marginTop: 10, width: '100%', alignItems: 'center'}]}
+                                        onPress={() => {
+                                            Alert.alert(
+                                                "Confirm Payment",
+                                                `શું તમને ${item.userName} પાસેથી ₹${item.amount} મળી ગયા છે?`,
+                                                [
+                                                    { text: "No", style: "cancel" },
+                                                    { text: "Yes, Received", onPress: () => handleConfirmPayment(item.id) }
+                                                ]
+                                            );
+                                        }}
+                                    >
+                                        <Text style={{color: '#fff', fontWeight: 'bold'}}>💰 Confirm Payment Received</Text>
+                                    </TouchableOpacity>
+                                )}
+
+                                {item.status === 'accepted' && item.paymentStatus === 'completed' && (
+                                    <View style={{backgroundColor: '#E8F5E9', padding: 8, borderRadius: 8, marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#4CAF50'}}>
+                                        <Text style={{color: '#2E7D32', fontWeight: 'bold', fontSize: 13}}>✅ Payment Received (₹{item.amount})</Text>
+                                    </View>
+                                )}
                             </View>
                         ))
                     )}
@@ -2259,8 +2491,30 @@ export default function App() {
                                 
                                 {item.status === 'accepted' && (
                                     <>
+                                        <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, backgroundColor: '#f0f9ff', padding: 8, borderRadius: 8}}>
+                                            <View>
+                                                <Text style={{fontSize: 12, color: '#0369a1'}}>Payment Amount</Text>
+                                                <Text style={{fontSize: 16, fontWeight: 'bold', color: '#0c4a6e'}}>₹{item.amount}</Text>
+                                            </View>
+                                            <View style={[styles.statusBadge, {backgroundColor: item.paymentStatus === 'completed' ? '#dcfce7' : '#fee2e2'}]}>
+                                                <Text style={{fontSize: 10, color: item.paymentStatus === 'completed' ? '#166534' : '#991b1b'}}>
+                                                    {item.paymentStatus === 'completed' ? 'PAID ✓' : 'UNPAID'}
+                                                </Text>
+                                            </View>
+                                        </View>
+
+                                        {item.paymentStatus !== 'completed' && (
+                                            <TouchableOpacity 
+                                                style={[styles.smallBtn, {backgroundColor: '#0c4a6e', marginBottom: 8, flexDirection: 'row', justifyContent: 'center'}]}
+                                                onPress={() => handleGuidePayment(item)}
+                                            >
+                                                <Text style={{fontSize: 14, marginRight: 5}}>💳</Text>
+                                                <Text style={{color: '#fff', fontWeight: 'bold'}}>Pay Now (UPI)</Text>
+                                            </TouchableOpacity>
+                                        )}
+
                                         <TouchableOpacity 
-                                            style={[styles.smallBtn, {backgroundColor: '#25D366', marginBottom: 8}]}
+                                            style={[styles.smallBtn, {backgroundColor: '#25D366', marginBottom: 8, flexDirection: 'row', justifyContent: 'center'}]}
                                             onPress={() => Linking.openURL(`whatsapp://send?phone=${item.guideContact}&text=Hi, I booked you as a guide for ${item.date}`)}
                                         >
                                             <Text style={{color: '#fff', fontWeight: 'bold'}}>Chat on WhatsApp</Text>
@@ -2308,16 +2562,11 @@ export default function App() {
             <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.header}>
                 <View style={{flexDirection: 'row', alignItems: 'center'}}>
                     <TouchableOpacity onPress={handleBack} style={{paddingRight: 15}}>
-                        <Text style={[styles.backButtonText, {fontSize: 22}]}>←</Text>
+                        <Ionicons name="arrow-back" size={28} color="#fff" />
                     </TouchableOpacity>
                     <Text style={[styles.headerTitle, {textAlign: 'left', flex: 1, marginLeft: 5}]} numberOfLines={1}>
-                        {language === 'hi' && selectedTemple.name_hi ? selectedTemple.name_hi :
-                         language === 'en' && selectedTemple.name_en ? selectedTemple.name_en :
-                         selectedTemple.name.split('–')[0].trim()}
-                    </Text> 
-                    <TouchableOpacity onPress={() => handleShareTemple(selectedTemple)} style={{paddingHorizontal: 10}}>
-                        <Text style={{fontSize: 22}}>📤</Text>
-                    </TouchableOpacity>
+                        {getTempleTranslation(selectedTemple, 'name', language)}
+                    </Text>
                 </View>
             </LinearGradient>
             )}
@@ -2355,13 +2604,29 @@ export default function App() {
                                     style={isFullScreen ? styles.minimizeButton : styles.fullScreenButton} 
                                     onPress={toggleFullScreen}
                                 >
-                                    <Text style={styles.fsButtonText}>{isFullScreen ? "Exit Full Screen" : "Full Screen"}</Text>
+                                    <Text style={styles.fsButtonText}>{isFullScreen ? getTranslation('exitFull', language) : getTranslation('fullScreen', language)}</Text>
                                 </TouchableOpacity>
                             </View>
                         ) : (
-                            <View style={styles.placeholderVideo}>
-                                <Text style={styles.placeholderText}>Current Live Not Available</Text>
-                                <Text style={styles.placeholderSubText}>Please check back later</Text>
+                            <View style={[styles.placeholderVideo, isFullScreen && { height: windowHeight, width: windowWidth }]}>
+                                {selectedTemple.imageUrl ? (
+                                    <>
+                                        <Image 
+                                            source={{ uri: selectedTemple.imageUrl }} 
+                                            style={styles.templeVideoImage}
+                                            resizeMode="cover"
+                                        />
+                                        <View style={styles.offlineOverlay}>
+                                            <Text style={styles.offlineText}>{language === 'gu' ? 'લાઇવ ઉપલબ્ધ નથી' : (language === 'hi' ? 'लाइव उपलब्ध नहीं है' : 'Live Not Available')}</Text>
+                                            <Text style={styles.offlineSubText}>{language === 'gu' ? 'મંદિર ના દર્શન' : (language === 'hi' ? 'मंदिर के दर्शन' : 'Temple View')}</Text>
+                                        </View>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Text style={styles.placeholderText}>Current Live Not Available</Text>
+                                        <Text style={styles.placeholderSubText}>Please check back later</Text>
+                                    </>
+                                )}
                             </View>
                         )}
                     </View>
@@ -2369,7 +2634,7 @@ export default function App() {
                     {!isFullScreen && (
                         <View style={styles.infoSection}>
                             <View style={styles.titleRow}>
-                                <Text style={styles.title}>{selectedTemple.name}</Text>
+                                <Text style={styles.title}>{getTempleTranslation(selectedTemple, 'name', language)}</Text>
                                 {selectedTemple.liveVideoId && selectedTemple.liveVideoId !== "PRE-RECORDED_VIDEO_ID" && (
                                     <View style={styles.liveBadge}>
                                         <View style={styles.liveDot} />
@@ -2378,14 +2643,10 @@ export default function App() {
                                 )}
                             </View>
                             <Text style={styles.location}>
-                                📍 {(language === 'en' && selectedTemple.location_en) ? selectedTemple.location_en :
-                                   (language === 'hi' && selectedTemple.location_hi) ? selectedTemple.location_hi :
-                                   selectedTemple.location}
+                                📍 {getTempleTranslation(selectedTemple, 'location', language)}
                             </Text>
                             <Text style={styles.description}>
-                                {(language === 'en' && selectedTemple.description_en) ? selectedTemple.description_en :
-                                 (language === 'hi' && selectedTemple.description_hi) ? selectedTemple.description_hi :
-                                 selectedTemple.description}
+                                {getTempleTranslation(selectedTemple, 'description', language)}
                             </Text>
 
                             {/* Local Guides Button */}
@@ -2396,8 +2657,8 @@ export default function App() {
                                     setIsGuidesModalVisible(true);
                                 }}
                             >
-                                <LinearGradient colors={['#4facfe', '#00f2fe']} style={styles.guidesBtnGradient}>
-                                    <Text style={styles.guidesBtnText}>🚩 Find Local Guide For This temple</Text>
+                                <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.guidesBtnGradient}>
+                                    <Text style={styles.guidesBtnText}>🚩 {getTranslation('findGuide', language)}</Text>
                                 </LinearGradient>
                             </TouchableOpacity>
                         </View>
@@ -2488,6 +2749,26 @@ export default function App() {
 
                                 </View>
 
+                                {/* Local Stories Section */}
+                                {selectedTemple.localStories && (
+                                    <View style={styles.guideSection}>
+                                        <Text style={styles.guideSectionTitle}>🎭 {getTranslation("localStories", language)}</Text>
+                                        <Text style={styles.guideText}>
+                                            {getTempleTranslation(selectedTemple, "localStories", language)}
+                                        </Text>
+                                    </View>
+                                )}
+
+                                {/* Hidden Gems Section */}
+                                {selectedTemple.hiddenGems && (
+                                    <View style={styles.guideSection}>
+                                        <Text style={styles.guideSectionTitle}>💎 {getTranslation("hiddenGems", language)}</Text>
+                                        <Text style={styles.guideText}>
+                                            {getTempleTranslation(selectedTemple, "hiddenGems", language)}
+                                        </Text>
+                                    </View>
+                                )}
+
                                 {/* Architecture */}
                                 <View style={styles.guideSection}>
                                     <Text style={styles.guideSectionTitle}>🏛️ {getTranslation('architecture', language)}</Text>
@@ -2569,6 +2850,38 @@ export default function App() {
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FF9933" />}
       >
+        {/* Quick Access: My Bookings */}
+        {userAppointments.length > 0 && (
+            <TouchableOpacity 
+                style={{
+                    backgroundColor: '#E3F2FD', 
+                    marginHorizontal: 15, 
+                    marginTop: 15,
+                    marginBottom: 5, 
+                    borderRadius: 15, 
+                    padding: 15, 
+                    flexDirection: 'row', 
+                    alignItems: 'center',
+                    borderLeftWidth: 5,
+                    borderLeftColor: '#2196F3',
+                    elevation: 3
+                }}
+                onPress={() => setIsUserBookingsVisible(true)}
+            >
+                <View style={{backgroundColor: '#fff', padding: 8, borderRadius: 12, marginRight: 12}}>
+                    <Text style={{fontSize: 20}}>📖</Text>
+                </View>
+                <View style={{flex: 1}}>
+                    <Text style={{fontSize: 15, fontWeight: 'bold', color: '#1565C0'}}>
+                        {getTranslation('myBookings', language)}
+                    </Text>
+                    <Text style={{fontSize: 11, color: '#42A5F5', marginTop: 2}}>
+                        {language === 'gu' ? `તમારી પાસે ${userAppointments.length} ગાઈડ બુકિંગ છે` : (language === 'hi' ? `आपके पास ${userAppointments.length} गाइड बुकिंग है` : `You have ${userAppointments.length} guide bookings`)}
+                    </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#2196F3" />
+            </TouchableOpacity>
+        )}
 
         {templeData.map((stateGroup, stateIndex) => (
             <View key={stateIndex} style={styles.stateGroup}>
@@ -2598,6 +2911,10 @@ export default function App() {
                                                 source={{ uri: temple.imageUrl }} 
                                                 style={styles.templeImage}
                                                 resizeMode="cover"
+                                                onError={(e) => {
+                                                    console.log("Image load error:", e.nativeEvent.error);
+                                                    // Optionally reset the imageUrl if it fails
+                                                }}
                                             />
                                         ) : (
                                             <Text style={styles.templeIconText}>🕉️</Text>
@@ -2607,7 +2924,7 @@ export default function App() {
                                         <Text style={styles.templeName}>
                                             {getTempleTranslation(temple, 'name', language)}
                                         </Text>
-                                        <Text style={styles.templeLocation}>{temple.location}</Text>
+                                        <Text style={styles.templeLocation}>{getTempleTranslation(temple, 'location', language)}</Text>
                                     </View>
                                     <View style={styles.rowActions}>
                                         <TouchableOpacity 
@@ -2641,16 +2958,19 @@ export default function App() {
                                         source={{ uri: temple.imageUrl }} 
                                         style={styles.templeImage}
                                         resizeMode="cover"
+                                        onError={(e) => console.log("Image load error:", e.nativeEvent.error)}
                                     />
                                 ) : (
-                                    <Text style={styles.templeIconText}>🕉️</Text>
+                                    <View style={{backgroundColor: '#FFF5E6', width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center'}}>
+                                        <Ionicons name="sunny" size={30} color="#FF9933" />
+                                    </View>
                                 )}
                             </View>
                             <View style={styles.templeInfo}>
                                 <Text style={styles.templeName}>
                                     {getTempleTranslation(temple, 'name', language)}
                                 </Text>
-                                <Text style={styles.templeLocation}>{temple.location}</Text>
+                                <Text style={styles.templeLocation}>{getTempleTranslation(temple, 'location', language)}</Text>
                             </View>
                             <View style={styles.rowActions}>
                                 <TouchableOpacity 
@@ -2672,8 +2992,8 @@ export default function App() {
             </View>
         ))}
          <View style={styles.footer}>
-            <Text style={styles.footerText}>Made with ❤️ for Devotees</Text>
-            <Text style={styles.footerText}>v1.1 (LAN Mode)</Text>
+            <Text style={styles.footerText}></Text>
+            <Text style={styles.footerText}></Text>
          </View>
       </ScrollView>
         </View>
@@ -2682,14 +3002,19 @@ export default function App() {
       {/* CUSTOM SIDE MENU MODAL */}
       <Modal
         animationType="fade"
-        transparent={true}
+        transparent={false}
         visible={isMenuVisible}
         onRequestClose={() => setIsMenuVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-            <TouchableOpacity style={styles.modalBackdrop} onPress={() => setIsMenuVisible(false)} />
-            <View style={styles.menuContainer}>
+        <StatusBar style="light" />
+        <View style={[styles.menuContainer, { width: '100%', height: '100%' }]}>
                 <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.menuHeader}>
+                    <TouchableOpacity 
+                        style={{ position: 'absolute', top: 40, right: 20, zIndex: 10 }}
+                        onPress={() => setIsMenuVisible(false)}
+                    >
+                        <Ionicons name="close" size={30} color="#fff" />
+                    </TouchableOpacity>
                     <Text style={styles.menuHeaderTitle}>Divya Darshan</Text>
                     <Text style={styles.menuHeaderSubtitle}>{user ? `Hi, ${user.name}` : "Welcome, Devotee"}</Text>
                 </LinearGradient>
@@ -2698,42 +3023,43 @@ export default function App() {
                     <View style={styles.menuItems}>
                         <TouchableOpacity style={styles.menuItem} onPress={handleProfilePress}>
                             <Text style={styles.menuIcon}>👤</Text>
-                            <Text style={styles.menuLabel}>My Profile</Text>
+                            <Text style={styles.menuLabel}>{getTranslation('myProfile', language)}</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); setIsJourneyVisible(true); }}>
                             <Text style={styles.menuIcon}>🛤️</Text>
-                            <Text style={styles.menuLabel}>Spiritual Journey</Text>
+                            <Text style={styles.menuLabel}>{getTranslation('spiritualJourney', language)}</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); setIsUserBookingsVisible(true); }}>
+                            <Text style={styles.menuIcon}>📖</Text>
+                            <Text style={styles.menuLabel}>{getTranslation('myBookings', language)}</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); setIsAboutVisible(true); }}>
                             <Text style={styles.menuIcon}>ℹ️</Text>
-                            <Text style={styles.menuLabel}>About Us</Text>
+                            <Text style={styles.menuLabel}>{getTranslation('aboutUs', language)}</Text>
                         </TouchableOpacity>
 
-                        <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); handleShareApp(); }}>
-                            <Text style={styles.menuIcon}>📤</Text>
-                            <Text style={styles.menuLabel}>Share App</Text>
-                        </TouchableOpacity>
 
                         <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); setIsDonationVisible(true); }}>
                             <Text style={styles.menuIcon}>🙏</Text>
-                            <Text style={styles.menuLabel}>Donation</Text>
+                            <Text style={styles.menuLabel}>{getTranslation('donation', language)}</Text>
                         </TouchableOpacity>
                         
                         <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); setIsSuggestionVisible(true); }}>
                             <Text style={styles.menuIcon}>💡</Text>
-                            <Text style={styles.menuLabel}>Suggestions</Text>
+                            <Text style={styles.menuLabel}>{getTranslation('suggestions', language)}</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); setGuideFormData({...guideFormData, name: user?.name || '', contact: user?.contact || ''}); setIsGuideRegVisible(true); }}>
                             <Text style={styles.menuIcon}>🚩</Text>
-                            <Text style={styles.menuLabel}>Become a Guide</Text>
+                            <Text style={styles.menuLabel}>{getTranslation('becomeGuide', language)}</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); setIsRatingVisible(true); setTempRating(user?.rating || 0); }}>
                             <Text style={styles.menuIcon}>⭐</Text>
-                            <Text style={styles.menuLabel}>Rate Us</Text>
+                            <Text style={styles.menuLabel}>{getTranslation('rateUs', language)}</Text>
                         </TouchableOpacity>
 
                         {user?.role === 'admin' && (
@@ -2743,10 +3069,12 @@ export default function App() {
                             </TouchableOpacity>
                         )}
 
-                        {/* Logout at the end */}
+                        {/* Login/Logout at the end */}
                         <TouchableOpacity style={[styles.menuItem, styles.menuItemLogout]} onPress={() => { setIsMenuVisible(false); handleLogout(); }}>
-                            <Text style={[styles.menuIcon, styles.menuIconLogout]}>🚪</Text>
-                            <Text style={[styles.menuLabel, styles.menuLabelLogout]}>Logout</Text>
+                            <Text style={[styles.menuIcon, styles.menuIconLogout]}>{user ? "🚪" : "🔑"}</Text>
+                            <Text style={[styles.menuLabel, styles.menuLabelLogout]}>
+                                {user ? getTranslation('logout', language) : getTranslation('login', language)}
+                            </Text>
                         </TouchableOpacity>
                     </View>
                 </ScrollView>
@@ -2755,18 +3083,17 @@ export default function App() {
                     <Text style={styles.menuFooterText}>Version 1.2.0</Text>
                 </View>
             </View>
-        </View>
       </Modal>
 
       {/* RATE US MODAL */}
       <Modal
         animationType="fade"
-        transparent={true}
+        transparent={false}
         visible={isRatingVisible}
         onRequestClose={() => setIsRatingVisible(false)}
       >
-        <View style={styles.centerModalOverlay}>
-            <View style={styles.ratingCard}>
+        <View style={styles.fullPageContainer}>
+            <View style={[styles.ratingCard, styles.fullPageCard, { justifyContent: 'center' }]}>
                 <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.ratingHeader}>
                     <Text style={styles.ratingEmoji}>⭐</Text>
                     <Text style={styles.ratingTitle}>Rate Our App</Text>
@@ -2799,12 +3126,12 @@ export default function App() {
       {/* SUGGESTION MODAL */}
       <Modal
         animationType="slide"
-        transparent={true}
+        transparent={false}
         visible={isSuggestionVisible}
         onRequestClose={() => setIsSuggestionVisible(false)}
       >
-        <View style={styles.centerModalOverlay}>
-            <View style={styles.suggestionCard}>
+        <View style={styles.fullPageContainer}>
+            <View style={[styles.suggestionCard, styles.fullPageCard]}>
                 <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.suggestionHeader}>
                     <Text style={styles.suggestionEmoji}>💡</Text>
                     <Text style={styles.suggestionTitle}>Give Suggestion</Text>
@@ -2857,13 +3184,13 @@ export default function App() {
       {/* LOCAL GUIDE REGISTRATION MODAL */}
       <Modal
         animationType="slide"
-        transparent={true}
+        transparent={false}
         visible={isGuideRegVisible}
         onRequestClose={() => setIsGuideRegVisible(false)}
       >
-        <View style={styles.centerModalOverlay}>
-            <View style={styles.suggestionCard}>
-                <LinearGradient colors={['#4facfe', '#00f2fe']} style={styles.suggestionHeader}>
+        <View style={styles.fullPageContainer}>
+            <View style={[styles.bookingCard, styles.fullPageCard, { width: '100%' }]}>
+                <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.suggestionHeader}>
                     <Text style={styles.suggestionEmoji}>🚩</Text>
                     <Text style={styles.suggestionTitle}>Become a Tourist Guide</Text>
                 </LinearGradient>
@@ -2974,6 +3301,14 @@ export default function App() {
                         onChangeText={(val) => setGuideFormData({...guideFormData, bio: val})}
                     />
 
+                    <Text style={styles.formLabel}>UPI ID for Payments (ફોન-પે/GPay ID):</Text>
+                    <TextInput 
+                        style={styles.suggestionInput}
+                        placeholder="e.g. name@paytm"
+                        value={guideFormData.upiId}
+                        onChangeText={(val) => setGuideFormData({...guideFormData, upiId: val})}
+                    />
+
                     <TouchableOpacity 
                         style={[styles.premiumUpdateBtn, isRegisteringGuide && { opacity: 0.7 }]}
                         onPress={handleRegisterGuide}
@@ -2997,14 +3332,14 @@ export default function App() {
       {/* LOCAL GUIDES LIST MODAL */}
       <Modal
         animationType="slide"
-        transparent={true}
+        transparent={false}
         visible={isGuidesModalVisible}
         onRequestClose={() => setIsGuidesModalVisible(false)}
       >
-        <View style={styles.centerModalOverlay}>
-            <View style={styles.guideListCard}>
+        <View style={styles.fullPageContainer}>
+            <View style={[styles.adminCard, styles.fullPageCard]}>
                 <LinearGradient 
-                    colors={['#0ea5e9', '#2563eb']} 
+                    colors={['#FF9933', '#FF512F']} 
                     style={styles.guideHeaderPremium}
                     start={{x: 0, y: 0}}
                     end={{x: 1, y: 1}}
@@ -3159,21 +3494,31 @@ export default function App() {
                                             </View>
 
                                             <View style={styles.guideActionRow}>
-                                                <TouchableOpacity 
-                                                    style={styles.guideActionCall}
-                                                    onPress={() => Linking.openURL(`tel:${g.contact}`)}
-                                                >
-                                                    <Text style={{fontSize: 16}}>📞</Text>
-                                                    <Text style={styles.guideActionBtnText}>Call Now</Text>
-                                                </TouchableOpacity>
+                                                {userAppointments.some(app => app.guideContact === g.contact && app.status === 'accepted') ? (
+                                                    <>
+                                                        <TouchableOpacity 
+                                                            style={styles.guideActionCall}
+                                                            onPress={() => Linking.openURL(`tel:${g.contact}`)}
+                                                        >
+                                                            <Text style={{fontSize: 16}}>📞</Text>
+                                                            <Text style={styles.guideActionBtnText}>Call Now</Text>
+                                                        </TouchableOpacity>
 
-                                                <TouchableOpacity 
-                                                    style={styles.guideActionWhatsapp}
-                                                    onPress={() => Linking.openURL(`https://wa.me/${g.contact}?text=Hello ${g.name}, I found you on Divya Darshan app. I need a guide for ${selectedTemple?.name}.`)}
-                                                >
-                                                    <Text style={{fontSize: 16}}>💬</Text>
-                                                    <Text style={[styles.guideActionBtnText, {color: '#fff'}]}>WhatsApp</Text>
-                                                </TouchableOpacity>
+                                                        <TouchableOpacity 
+                                                            style={styles.guideActionWhatsapp}
+                                                            onPress={() => Linking.openURL(`https://wa.me/${g.contact}?text=Hello ${g.name}, I found you on Divya Darshan app. I need a guide for ${selectedTemple?.name}.`)}
+                                                        >
+                                                            <Text style={{fontSize: 16}}>💬</Text>
+                                                            <Text style={[styles.guideActionBtnText, {color: '#fff'}]}>WhatsApp</Text>
+                                                        </TouchableOpacity>
+                                                    </>
+                                                ) : (
+                                                    <View style={{flex: 1, backgroundColor: '#f1f5f9', padding: 8, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderStyle: 'dashed', borderWidth: 1, borderColor: '#cbd5e1'}}>
+                                                        <Text style={{fontSize: 11, color: '#64748b', textAlign: 'center'}}>
+                                                            🔒 {language === 'gu' ? 'બુકિંગ સ્વીકાર્યા પછી જ સંપર્ક કરી શકાશે' : (language === 'hi' ? 'बुकिंग स्वीकार होने के बाद ही संपर्क कर सकेंगे' : 'Contact enabled after acceptance')}
+                                                        </Text>
+                                                    </View>
+                                                )}
                                             </View>
 
                                             <TouchableOpacity 
@@ -3184,7 +3529,7 @@ export default function App() {
                                                 }}
                                             >
                                                 <LinearGradient 
-                                                    colors={['#4f46e5', '#3730a3']} 
+                                                    colors={['#FF9933', '#FF512F']} 
                                                     style={styles.guideBookGradient}
                                                     start={{x: 0, y: 0}}
                                                     end={{x: 1, y: 0}}
@@ -3229,14 +3574,14 @@ export default function App() {
       {/* LOCAL GUIDE BOOKING MODAL */}
       <Modal
         animationType="fade"
-        transparent={true}
+        transparent={false}
         visible={isBookingModalVisible}
         onRequestClose={() => setIsBookingModalVisible(false)}
       >
-        <View style={styles.centerModalOverlay}>
-            <View style={styles.bookingCard}>
+        <View style={styles.fullPageContainer}>
+            <View style={[styles.bookingCard, styles.fullPageCard]}>
                 <LinearGradient 
-                    colors={['#4f46e5', '#3730a3']} 
+                    colors={['#FF9933', '#FF512F']} 
                     style={styles.bookingHeader}
                 >
                     <Text style={styles.bookingTitle}>Confirm Appointment</Text>
@@ -3248,7 +3593,7 @@ export default function App() {
                 <View style={styles.bookingContent}>
                     <View style={styles.bookingGuideInfo}>
                         <View style={styles.smallAvatar}>
-                            <Text style={{color: '#4f46e5', fontWeight: 'bold'}}>{selectedGuideForBooking?.name?.charAt(0)}</Text>
+                            <Text style={{color: '#FF9933', fontWeight: 'bold'}}>{selectedGuideForBooking?.name?.charAt(0)}</Text>
                         </View>
                         <View style={{marginLeft: 12}}>
                             <Text style={styles.bookingGuideName}>{selectedGuideForBooking?.name}</Text>
@@ -3306,12 +3651,12 @@ export default function App() {
       {/* GUIDE REVIEW MODAL */}
       <Modal
         animationType="fade"
-        transparent={true}
+        transparent={false}
         visible={isReviewModalVisible}
         onRequestClose={() => setIsReviewModalVisible(false)}
       >
-        <View style={styles.centerModalOverlay}>
-            <View style={styles.bookingCard}>
+        <View style={styles.fullPageContainer}>
+            <View style={[styles.bookingCard, styles.fullPageCard]}>
                 <LinearGradient 
                     colors={['#FF9933', '#FF512F']} 
                     style={styles.bookingHeader}
@@ -3385,14 +3730,15 @@ export default function App() {
       {/* JOURNEY GUIDE MODAL */}
       <Modal
         animationType="slide"
-        transparent={true}
+        transparent={false}
         visible={isJourneyVisible}
         onRequestClose={() => setIsJourneyVisible(false)}
       >
-        <View style={styles.centerModalOverlay}>
-            <View style={styles.journeyGuideCard}>
+        <StatusBar style="light" />
+        <View style={styles.fullPageContainer}>
+            <View style={[styles.journeyGuideCard, styles.fullPageCard]}>
                 <LinearGradient 
-                    colors={['#667eea', '#764ba2', '#f093fb']} 
+                    colors={['#FF9933', '#FF512F']} 
                     start={{x: 0, y: 0}}
                     end={{x: 1, y: 1}}
                     style={styles.journeyHeader}
@@ -3401,24 +3747,24 @@ export default function App() {
                         style={styles.journeyCloseBtn} 
                         onPress={() => setIsJourneyVisible(false)}
                     >
-                        <Text style={styles.journeyCloseText}>✕</Text>
+                        <Ionicons name="close" size={24} color="#fff" />
                     </TouchableOpacity>
                     
                     {/* Premium Icon with glow effect */}
                     <View style={styles.journeyHeaderIconContainer}>
                         <View style={styles.journeyHeaderIconGlow}>
                             <View style={styles.journeyHeaderIcon}>
-                                <Text style={styles.journeyIconText}>🗺️</Text>
+                                <Ionicons name="map" size={45} color="#FF9933" />
                             </View>
                         </View>
                     </View>
                     
-                    <Text style={styles.journeyTitle}>Spiritual Journey Guide</Text>
-                    <Text style={styles.journeyHeaderSubtitle}>Discover divine paths & sacred places</Text>
+                    <Text style={styles.journeyTitle}>{getTranslation('spiritualJourney', language)}</Text>
+                    <Text style={styles.journeyHeaderSubtitle}>{language === 'en' ? 'Discover divine paths & sacred places' : (language === 'hi' ? 'दिव्य पथ और पवित्र स्थानों की खोज करें' : 'દિવ્ય માર્ગો અને પવિત્ર સ્થાનો શોધો')}</Text>
                 </LinearGradient>
                 
                 <ScrollView contentContainerStyle={styles.journeyScrollContent} showsVerticalScrollIndicator={false}>
-                    <Text style={styles.journeySubtitle}>Plan your divine route ✨</Text>
+                    <Text style={styles.journeySubtitle}>{language === 'en' ? 'Plan your divine route ✨' : (language === 'hi' ? 'अपने दिव्य मार्ग की योजना बनाएं ✨' : 'તમારા દિવ્ય માર્ગનું આયોજન કરો ✨')}</Text>
                     
                     <View style={styles.journeyInputSection}>
                         {/* Origin Input */}
@@ -3433,7 +3779,7 @@ export default function App() {
                                     onPress={handleGetCurrentLocation}
                                     disabled={isJourneyLoading}
                                 >
-                                    <Text style={styles.useCurrentIcon}>🎯</Text>
+                                    <Ionicons name="locate" size={18} color="#FF9933" style={{marginRight: 4}} />
                                     <Text style={styles.useCurrentText}>Current</Text>
                                 </TouchableOpacity>
                             </View>
@@ -3495,7 +3841,7 @@ export default function App() {
                                         }
                                     }}
                                 >
-                                    <Text style={styles.pickMapIcon}>🗺️</Text>
+                                    <Ionicons name="map-outline" size={18} color="#FF9933" style={{marginRight: 4}} />
                                     <Text style={styles.pickMapText}>Pick on Map</Text>
                                 </TouchableOpacity>
                             </View>
@@ -3514,7 +3860,7 @@ export default function App() {
                         
                         {/* Travel Mode Selector */}
                         <View style={{marginTop: 20}}>
-                            <Text style={{fontSize: 14, fontWeight: 'bold', color: '#4f46e5', marginBottom: 12, textAlign: 'center'}}>
+                            <Text style={{fontSize: 14, fontWeight: 'bold', color: '#D35400', marginBottom: 12, textAlign: 'center'}}>
                                 🚀 Select Travel Mode
                             </Text>
                             <View style={{flexDirection: 'row', justifyContent: 'space-between', gap: 10}}>
@@ -3669,7 +4015,7 @@ export default function App() {
                         activeOpacity={0.8}
                     >
                         <LinearGradient 
-                            colors={['#667eea', '#764ba2']} 
+                            colors={['#FF9933', '#FF512F']} 
                             start={{x: 0, y: 0}}
                             end={{x: 1, y: 0}}
                             style={styles.revealPathGradient}
@@ -3687,8 +4033,8 @@ export default function App() {
 
                     {journeySteps.length > 0 && (
                         <View style={{marginTop: 10}}>
-                            <View style={{backgroundColor: '#eef2ff', padding: 15, borderRadius: 15, marginBottom: 15, borderBottomWidth: 3, borderBottomColor: '#4f46e5'}}>
-                                <Text style={{fontSize: 18, fontWeight: 'bold', color: '#3730a3', textAlign: 'center'}}>✨ {journeyTitle}</Text>
+                            <View style={{backgroundColor: '#FFF5E6', padding: 15, borderRadius: 15, marginBottom: 15, borderBottomWidth: 3, borderBottomColor: '#FF9933'}}>
+                                <Text style={{fontSize: 18, fontWeight: 'bold', color: '#D35400', textAlign: 'center'}}>✨ {journeyTitle}</Text>
                                 
                                 {/* Recommended Route Path */}
                                 {journeyRoutePath && (
@@ -3698,17 +4044,34 @@ export default function App() {
                                     </View>
                                 )}
                                 
-                                <Text style={{fontSize: 12, color: '#6366f1', textAlign: 'center', marginTop: 8}}>📏 Distance: {journeyDistance} | ⏱️ Time: {journeyEstimatedTime || 'Calculating...'}</Text>
+                                <Text style={{fontSize: 12, color: '#D35400', textAlign: 'center', marginTop: 8}}>📏 Distance: {journeyDistance} | ⏱️ Time: {journeyEstimatedTime || 'Calculating...'}</Text>
+                                
+                                {/* NEW: Travel Mode Comparisons */}
+                                {journeyTravelOptions && journeyTravelOptions.length > 0 && (
+                                    <View style={{marginTop: 15}}>
+                                        <Text style={{fontSize: 14, fontWeight: 'bold', color: '#D35400', marginBottom: 10, textAlign: 'center'}}>🏁 Travel Mode Comparison</Text>
+                                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap: 12, paddingBottom: 5}}>
+                                            {journeyTravelOptions.map((opt, idx) => (
+                                                <View key={idx} style={{backgroundColor: '#fff', padding: 12, borderRadius: 15, width: 200, borderWidth: 1, borderColor: '#FFE0B2', elevation: 2}}>
+                                                    <Text style={{fontSize: 15, fontWeight: 'bold', color: '#D35400'}}>{opt.mode}</Text>
+                                                    <Text style={{fontSize: 12, color: '#666', marginTop: 4}}>⏱️ {opt.duration}</Text>
+                                                    <Text style={{fontSize: 12, color: '#10B981', fontWeight: '600', marginTop: 2}}>💰 {opt.approxCost}</Text>
+                                                    <Text style={{fontSize: 11, color: '#64748b', marginTop: 5, fontStyle: 'italic'}}>{opt.prosCons}</Text>
+                                                </View>
+                                            ))}
+                                        </ScrollView>
+                                    </View>
+                                )}
                                 
                                 {/* Places Count - Exact Route Only */}
-                                <View style={{marginTop: 12, backgroundColor: '#fff', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#c7d2fe'}}>
+                                <View style={{marginTop: 12, backgroundColor: '#fff', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#FFE0B2'}}>
                                     <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'center'}}>
                                         <Text style={{fontSize: 26, marginRight: 10}}>🛣️</Text>
                                         <View>
-                                            <Text style={{fontSize: 16, fontWeight: 'bold', color: '#4338ca'}}>
+                                            <Text style={{fontSize: 16, fontWeight: 'bold', color: '#D35400'}}>
                                                 {journeySteps.length} Places on This Route
                                             </Text>
-                                            <Text style={{fontSize: 11, color: '#6366f1', marginTop: 3, fontStyle: 'italic'}}>
+                                            <Text style={{fontSize: 11, color: '#E67E22', marginTop: 3, fontStyle: 'italic'}}>
                                                 Following the recommended path
                                             </Text>
                                         </View>
@@ -3716,29 +4079,54 @@ export default function App() {
                                 </View>
                                 
                                 <TouchableOpacity 
-                                    style={{marginTop: 12, backgroundColor: '#fff', padding: 8, borderRadius: 10, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', borderWidth: 1, borderColor: '#e0e7ff'}}
+                                    style={{marginTop: 12, backgroundColor: '#fff', padding: 8, borderRadius: 10, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', borderWidth: 1, borderColor: '#FFE0B2'}}
                                     onPress={() => Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(journeyOrigin)}&destination=${encodeURIComponent(journeyDestination)}&travelmode=driving`)}
                                 >
                                     <Text style={{fontSize: 14, marginRight: 8}}>🗺️</Text>
-                                    <Text style={{color: '#4f46e5', fontWeight: 'bold', fontSize: 13}}>View Route on Google Maps</Text>
+                                    <Text style={{color: '#D35400', fontWeight: 'bold', fontSize: 13}}>View Route on Google Maps</Text>
                                 </TouchableOpacity>
                             </View>
+
+                            {/* NEW: Final Destination Plan (Must Have!) */}
+                            {journeyDestinationPlan && (
+                                <View style={{backgroundColor: '#EFF6FF', borderRadius: 20, padding: 18, marginBottom: 20, borderWidth: 1, borderColor: '#BFDBFE'}}>
+                                    <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 12}}>
+                                        <Text style={{fontSize: 24, marginRight: 10}}>🏁</Text>
+                                        <Text style={{fontSize: 18, fontWeight: 'bold', color: '#1E40AF'}}>Arriving at Destination</Text>
+                                    </View>
+                                    
+                                    <View style={{backgroundColor: '#fff', borderRadius: 15, padding: 15, marginBottom: 12}}>
+                                        <Text style={{fontSize: 14, fontWeight: 'bold', color: '#1E40AF', marginBottom: 5}}>🏨 RECOMMENDED HOTELS</Text>
+                                        <Text style={{fontSize: 13, color: '#444', lineHeight: 20}}>{journeyDestinationPlan.topHotels}</Text>
+                                    </View>
+                                    
+                                    <View style={{backgroundColor: '#fff', borderRadius: 15, padding: 15, marginBottom: 12}}>
+                                        <Text style={{fontSize: 14, fontWeight: 'bold', color: '#1E40AF', marginBottom: 5}}>🗺️ LOCAL TOUR PLAN</Text>
+                                        <Text style={{fontSize: 13, color: '#444', lineHeight: 20}}>{journeyDestinationPlan.localTourPlan}</Text>
+                                    </View>
+                                    
+                                    <View style={{backgroundColor: '#fff', borderRadius: 15, padding: 15}}>
+                                        <Text style={{fontSize: 14, fontWeight: 'bold', color: '#1E40AF', marginBottom: 5}}>🚕 LOCAL TRAVEL & RENT</Text>
+                                        <Text style={{fontSize: 13, color: '#444', lineHeight: 20}}>{journeyDestinationPlan.localTravelRent}</Text>
+                                    </View>
+                                </View>
+                            )}
 
                             <View style={{paddingLeft: 10}}>
                                 {journeySteps.map((step, idx) => (
                                     <View key={idx} style={{flexDirection: 'row', marginBottom: 25}}>
                                         {/* Timeline Line & Dot */}
                                         <View style={{alignItems: 'center', marginRight: 15}}>
-                                            <View style={{width: 24, height: 24, borderRadius: 12, backgroundColor: '#4f46e5', zIndex: 2, justifyContent: 'center', alignItems: 'center', elevation: 3}}>
+                                            <View style={{width: 24, height: 24, borderRadius: 12, backgroundColor: '#FF9933', zIndex: 2, justifyContent: 'center', alignItems: 'center', elevation: 3}}>
                                                 <Text style={{color: '#fff', fontSize: 11, fontWeight: 'bold'}}>{idx + 1}</Text>
                                             </View>
                                             {idx < journeySteps.length - 1 && (
-                                                <View style={{width: 3, flex: 1, backgroundColor: '#c7d2fe', marginVertical: 4}} />
+                                                <View style={{width: 3, flex: 1, backgroundColor: '#FFE0B2', marginVertical: 4}} />
                                             )}
                                         </View>
 
                                         {/* Content Card */}
-                                        <View style={{flex: 1, backgroundColor: '#fff', borderRadius: 22, padding: 20, elevation: 5, borderLeftWidth: 6, borderLeftColor: '#4f46e5'}}>
+                                        <View style={{flex: 1, backgroundColor: '#fff', borderRadius: 22, padding: 20, elevation: 5, borderLeftWidth: 6, borderLeftColor: '#FF9933'}}>
                                             {/* Badges Row */}
                                             <View style={{flexDirection: 'row', flexWrap: 'wrap', marginBottom: 12, gap: 8}}>
                                                 {/* Category Badge */}
@@ -3814,13 +4202,13 @@ export default function App() {
       {/* ADMIN PANEL MODAL */}
       <Modal
         animationType="slide"
-        transparent={true}
+        transparent={false}
         visible={isAdminVisible}
         onRequestClose={() => setIsAdminVisible(false)}
       >
-        <View style={styles.centerModalOverlay}>
-            <View style={styles.adminCard}>
-                <LinearGradient colors={['#1e293b', '#0f172a']} style={styles.adminHeader}>
+        <View style={styles.fullPageContainer}>
+            <View style={[styles.adminCard, styles.fullPageCard]}>
+                <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.adminHeader}>
                     <TouchableOpacity style={styles.headerCloseIcon} onPress={() => setIsAdminVisible(false)}>
                         <Text style={styles.headerCloseText}>✕</Text>
                     </TouchableOpacity>
@@ -3835,6 +4223,7 @@ export default function App() {
                         {[
                             { id: 'suggestions', label: 'Suggestions', icon: '💡' },
                             { id: 'ratings', label: 'Ratings', icon: '⭐' },
+                            { id: 'earnings', label: 'Earnings', icon: '💰' },
                             { id: 'guides', label: 'Guides', icon: '🚩' },
                             { id: 'addTemple', label: 'Add Temple', icon: '⛩️' },
                             { id: 'manage', label: 'Manage', icon: '⚙️' },
@@ -3847,6 +4236,7 @@ export default function App() {
                                     setActiveAdminTab(tab.id);
                                     if(tab.id === 'suggestions') fetchAdminSuggestions();
                                     if(tab.id === 'ratings') fetchAdminRatings();
+                                    if(tab.id === 'earnings') fetchAdminEarnings();
                                     if(tab.id === 'guides') fetchAdminGuides();
                                     if(tab.id === 'registerAdmin') fetchAdminUsers(); // Fetch users when tab selected
                                 }}
@@ -3863,7 +4253,7 @@ export default function App() {
                     {activeAdminTab === 'suggestions' && (
                         <View style={styles.adminSectionBody}>
                             {isAdminLoading ? (
-                                <View style={styles.adminLoader}><ActivityIndicator color="#6366f1" size="large" /></View>
+                                <View style={styles.adminLoader}><ActivityIndicator color="#FF9933" size="large" /></View>
                             ) : (
                                 Array.isArray(adminSuggestions) && adminSuggestions.length > 0 ? (
                                     adminSuggestions.map((s, idx) => (
@@ -3910,10 +4300,84 @@ export default function App() {
                         </View>
                     )}
 
+                    {activeAdminTab === 'earnings' && (
+                        <View style={styles.adminSectionBody}>
+                            {isAdminLoading ? (
+                                <View style={styles.adminLoader}><ActivityIndicator color="#059669" size="large" /></View>
+                            ) : (
+                                <>
+                                    <View style={{flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: 20}}>
+                                        <View style={{width: '48%', backgroundColor: '#ecfdf5', padding: 15, borderRadius: 15, marginBottom: 10, borderWidth: 1, borderColor: '#10b981'}}>
+                                            <Text style={{fontSize: 12, color: '#059669', fontWeight: 'bold'}}>TOTAL REVENUE</Text>
+                                            <Text style={{fontSize: 20, fontWeight: 'bold', color: '#047857'}}>₹{adminEarnings.stats?.totalEarnings || 0}</Text>
+                                        </View>
+                                        <View style={{width: '48%', backgroundColor: '#eff6ff', padding: 15, borderRadius: 15, marginBottom: 10, borderWidth: 1, borderColor: '#3b82f6'}}>
+                                            <Text style={{fontSize: 12, color: '#2563eb', fontWeight: 'bold'}}>TOTAL PROFIT</Text>
+                                            <Text style={{fontSize: 20, fontWeight: 'bold', color: '#1d4ed8'}}>₹{adminEarnings.stats?.totalCommission || 0}</Text>
+                                        </View>
+                                        <View style={{width: '100%', backgroundColor: '#fff7ed', padding: 15, borderRadius: 15, borderWidth: 1, borderColor: '#f97316'}}>
+                                            <Text style={{fontSize: 12, color: '#ea580c', fontWeight: 'bold'}}>PENDING COMMISSION FROM GUIDES</Text>
+                                            <Text style={{fontSize: 24, fontWeight: 'bold', color: '#c2410c'}}>₹{adminEarnings.stats?.pendingCommission || 0}</Text>
+                                        </View>
+                                    </View>
+
+                                    <Text style={{fontSize: 18, fontWeight: 'bold', color: '#1e293b', marginBottom: 15}}>Recent Transactions</Text>
+                                    
+                                    {adminEarnings.history?.length > 0 ? (
+                                        adminEarnings.history.map((item, idx) => (
+                                            <View key={idx} style={[styles.suggestionItem, {borderLeftWidth: 4, borderLeftColor: item.adminCommissionStatus === 'received' ? '#10b981' : '#f97316'}]}>
+                                                <View style={{flexDirection: 'row', justifyContent: 'space-between'}}>
+                                                    <View>
+                                                        <Text style={{fontWeight: 'bold', fontSize: 16}}>{item.guideName}</Text>
+                                                        <Text style={{fontSize: 12, color: '#64748b'}}>Customer: {item.userName}</Text>
+                                                    </View>
+                                                    <View style={{alignItems: 'flex-end'}}>
+                                                        <Text style={{fontWeight: 'bold', color: '#1e293b'}}>₹{item.amount}</Text>
+                                                        <Text style={{fontSize: 11, color: '#059669'}}>Comm: ₹{item.commissionAmount}</Text>
+                                                    </View>
+                                                </View>
+                                                
+                                                <View style={{marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
+                                                    <View style={{backgroundColor: item.paymentStatus === 'completed' ? '#dcfce7' : '#fff7ed', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6}}>
+                                                        <Text style={{fontSize: 10, fontWeight: 'bold', color: item.paymentStatus === 'completed' ? '#166534' : '#ea580c'}}>
+                                                            {item.paymentStatus === 'completed' ? 'PAID ✓' : 'PENDING USER PAYMENT'}
+                                                        </Text>
+                                                    </View>
+                                                    
+                                                    {item.paymentStatus !== 'completed' && (
+                                                        <TouchableOpacity 
+                                                            style={{backgroundColor: '#3b82f6', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8}}
+                                                            onPress={() => handleConfirmUserPayment(item.id)}
+                                                        >
+                                                            <Text style={{color: '#fff', fontSize: 11, fontWeight: 'bold'}}>Confirm Receipt & Release Funds</Text>
+                                                        </TouchableOpacity>
+                                                    )}
+                                                </View>
+
+                                                {item.paymentStatus === 'completed' && (
+                                                    <View style={{marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f1f5f9'}}>
+                                                        <Text style={{fontSize: 11, color: '#64748b'}}>
+                                                            Status: {item.adminCommissionStatus === 'received' ? '✅ Commission Collected' : '⏳ Commission from Guide Pending'}
+                                                        </Text>
+                                                    </View>
+                                                )}
+                                            </View>
+                                        ))
+                                    ) : (
+                                        <View style={styles.emptyContainer}>
+                                            <Text style={styles.emptyIcon}>💰</Text>
+                                            <Text style={styles.emptyText}>No earnings recorded yet</Text>
+                                        </View>
+                                    )}
+                                </>
+                            )}
+                        </View>
+                    )}
+
                     {activeAdminTab === 'ratings' && (
                         <View style={styles.adminSectionBody}>
                             {isAdminLoading ? (
-                                <View style={styles.adminLoader}><ActivityIndicator color="#6366f1" size="large" /></View>
+                                <View style={styles.adminLoader}><ActivityIndicator color="#FF9933" size="large" /></View>
                             ) : (
                                 Array.isArray(adminRatings) && adminRatings.length > 0 ? (
                                     adminRatings.map((r, idx) => (
@@ -4101,7 +4565,7 @@ export default function App() {
                                         onPress={handleAiGenerate}
                                         disabled={isAiGenerating}
                                     >
-                                        <LinearGradient colors={['#6366f1', '#a855f7']} style={styles.aiBtnGradient}>
+                                        <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.aiBtnGradient}>
                                             <Text style={styles.aiBtnText}>{isAiGenerating ? "🌀" : "✨ Generate"}</Text>
                                         </LinearGradient>
                                     </TouchableOpacity>
@@ -4274,7 +4738,7 @@ export default function App() {
                                     <View key={idx} style={styles.suggestionItem}>
                                         <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
                                             <View style={{flex: 1}}>
-                                                <Text style={styles.adminListHeader}>{u.name} <Text style={{fontSize: 12, color: '#6366f1'}}>({u.role})</Text></Text>
+                                                <Text style={styles.adminListHeader}>{u.name} <Text style={{fontSize: 12, color: '#FF9933'}}>({u.role})</Text></Text>
                                                 <Text style={styles.adminListSub}>{u.contact}</Text>
                                                 {u.phoneNumber ? <Text style={styles.adminListSub}>📞 {u.phoneNumber}</Text> : null}
                                             </View>
@@ -4300,13 +4764,13 @@ export default function App() {
 
       {/* DONATION MODAL */}
       <Modal
-        animationType="fade"
-        transparent={true}
+        animationType="slide"
+        transparent={false}
         visible={isDonationVisible}
         onRequestClose={() => setIsDonationVisible(false)}
       >
-        <View style={styles.centerModalOverlay}>
-            <View style={styles.donationCard}>
+        <View style={styles.fullPageContainer}>
+            <View style={[styles.donationCard, styles.fullPageCard]}>
                 <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.donationHeader}>
                     <TouchableOpacity style={styles.headerCloseIcon} onPress={() => setIsDonationVisible(false)}>
                         <Text style={styles.headerCloseText}>✕</Text>
@@ -4359,12 +4823,12 @@ export default function App() {
       {/* ATTRACTIVE ABOUT US MODAL */}
       <Modal
         animationType="slide"
-        transparent={true}
+        transparent={false}
         visible={isAboutVisible}
         onRequestClose={() => setIsAboutVisible(false)}
       >
-        <View style={styles.centerModalOverlay}>
-            <View style={styles.aboutCard}>
+        <View style={styles.fullPageContainer}>
+            <View style={[styles.aboutCard, styles.fullPageCard]}>
                 <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.aboutHeader}>
                     <TouchableOpacity style={styles.headerCloseIcon} onPress={() => setIsAboutVisible(false)}>
                         <Text style={styles.headerCloseText}>✕</Text>
@@ -4393,11 +4857,11 @@ export default function App() {
                         <Text style={styles.aboutHeaderTitle}>સંપર્ક કરો (Contact Us)</Text>
                         <View style={styles.contactRow}>
                             <Text style={styles.contactIcon}>📞</Text>
-                            <Text style={styles.contactText}>+91 6300000000</Text>
+                            <Text style={styles.contactText}>+91 6353455902</Text>
                         </View>
                         <View style={styles.contactRow}>
                             <Text style={styles.contactIcon}>📧</Text>
-                            <Text style={styles.contactText}>dvngroup@gmail.com</Text>
+                            <Text style={styles.contactText}>dvngroup.official@gmail.com</Text>
                         </View>
                     </View>
                     
@@ -4413,12 +4877,12 @@ export default function App() {
       {/* ATTRACTIVE PROFILE MODAL */}
       <Modal
         animationType="slide"
-        transparent={true}
+        transparent={false}
         visible={isProfileVisible}
         onRequestClose={() => setIsProfileVisible(false)}
       >
-        <View style={styles.centerModalOverlay}>
-            <View style={styles.aboutCard}>
+        <View style={styles.fullPageContainer}>
+            <View style={[styles.aboutCard, styles.fullPageCard]}>
                 <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.aboutHeader}>
                     <TouchableOpacity style={styles.headerCloseIcon} onPress={() => setIsProfileVisible(false)}>
                         <Text style={styles.headerCloseText}>✕</Text>
@@ -4488,6 +4952,51 @@ export default function App() {
                     {user && user.wantsToWorkAsGuide && (
                         <View style={{ marginTop: 20, padding: 15, backgroundColor: '#FFF3E0', borderRadius: 15, borderLeftWidth: 5, borderLeftColor: '#FF9933' }}>
                             <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#E65100', marginBottom: 10 }}>LOCAL GUIDE DASHBOARD</Text>
+                            
+                            {/* Wallet Info */}
+                            <View style={{backgroundColor: '#fff', padding: 12, borderRadius: 10, marginBottom: 15, borderWidth: 1, borderColor: guideWallet.isBlocked ? '#ef4444' : '#fbbf24'}}>
+                                <View style={{flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10}}>
+                                    <View>
+                                        <Text style={{fontSize: 11, color: '#666'}}>Your Earnings (Withdrawable)</Text>
+                                        <Text style={{fontSize: 22, fontWeight: 'bold', color: '#059669'}}>₹{guideWallet.withdrawableBalance || 0}</Text>
+                                    </View>
+                                    <View style={{alignItems: 'flex-end'}}>
+                                      {guideWallet.withdrawableBalance > 0 && (
+                                          <TouchableOpacity 
+                                              style={{backgroundColor: '#059669', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8}}
+                                              onPress={handleRequestPayout}
+                                          >
+                                              <Text style={{color: '#fff', fontWeight: 'bold', fontSize: 12}}>Withdraw</Text>
+                                          </TouchableOpacity>
+                                      )}
+                                    </View>
+                                </View>
+                                
+                                <View style={{height: 1, backgroundColor: '#eee', marginVertical: 8}} />
+
+                                <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
+                                    <View>
+                                        <Text style={{fontSize: 11, color: '#666'}}>Pending Dues (Owed to Admin)</Text>
+                                        <Text style={{fontSize: 18, fontWeight: 'bold', color: guideWallet.isBlocked ? '#b91c1c' : '#92400e'}}>₹{guideWallet.commissionBalance || 0}</Text>
+                                    </View>
+                                    <View style={{alignItems: 'flex-end'}}>
+                                        <Text style={{fontSize: 10, color: '#999'}}>Limit: ₹{guideWallet.limit}</Text>
+                                        <Text style={{fontSize: 10, fontWeight: 'bold', color: guideWallet.isBlocked ? '#b91c1c' : '#059669'}}>
+                                            {guideWallet.isBlocked ? '🛑 BLOCKED' : '✅ ACTIVE'}
+                                        </Text>
+                                    </View>
+                                </View>
+                                
+                                {guideWallet.commissionBalance > 0 && (
+                                    <TouchableOpacity 
+                                        style={{backgroundColor: '#92400e', marginTop: 10, padding: 8, borderRadius: 6, alignItems: 'center'}}
+                                        onPress={() => handleSettleDues(guideWallet.commissionBalance)}
+                                    >
+                                        <Text style={{color: '#fff', fontSize: 12, fontWeight: 'bold'}}>Pay Admin Dues</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+
                             <TouchableOpacity 
                                 style={{ backgroundColor: '#FF9933', padding: 12, borderRadius: 10, alignItems: 'center' }} 
                                 onPress={() => setIsAppointmentsVisible(true)}
@@ -4517,7 +5026,9 @@ export default function App() {
                     <View style={{height: 20}} />
 
                     <TouchableOpacity style={styles.logoutActionBtn} onPress={handleLogout}>
-                        <Text style={styles.logoutActionText}>Logout from App</Text>
+                        <Text style={styles.logoutActionText}>
+                            {user ? getTranslation('logout', language) : getTranslation('login', language)}
+                        </Text>
                     </TouchableOpacity>
                     
                     <View style={{height: 30}} />
@@ -4568,12 +5079,12 @@ const styles = StyleSheet.create({
     borderRadius: 12, padding: 15, marginBottom: 10,
     elevation: 2, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 2, shadowOffset: { width: 0, height: 1 }
   },
-  templeIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFF0E0', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  templeIcon: { width: 70, height: 70, borderRadius: 15, backgroundColor: '#FFF5E6', justifyContent: 'center', alignItems: 'center', marginRight: 15, overflow: 'hidden' },
   templeIconText: { fontSize: 20 },
   templeImage: { 
-    width: 40, 
-    height: 40, 
-    borderRadius: 20,
+    width: '100%', 
+    height: '100%', 
+    borderRadius: 15,
   },
   templeInfo: { flex: 1 },
   templeName: { fontSize: 16, fontWeight: '600', color: '#333' },
@@ -4587,7 +5098,11 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   videoContainer: { backgroundColor: '#000', minHeight: 220 },
-  placeholderVideo: { height: 220, justifyContent: 'center', alignItems: 'center', backgroundColor: '#e0e0e0' },
+  placeholderVideo: { height: 220, justifyContent: 'center', alignItems: 'center', backgroundColor: '#e0e0e0', overflow: 'hidden' },
+  templeVideoImage: { width: '100%', height: '100%' },
+  offlineOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.6)', paddingVertical: 8, alignItems: 'center' },
+  offlineText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  offlineSubText: { color: '#ddd', fontSize: 11, marginTop: 2 },
   placeholderText: { color: '#555', fontSize: 16, fontWeight: 'bold' },
   placeholderSubText: { color: '#777', fontSize: 12, marginTop: 5 },
   infoSection: { padding: 15 },
@@ -4774,6 +5289,9 @@ const styles = StyleSheet.create({
   },
   loginButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold', letterSpacing: 0.5 },
   footerNote: { textAlign: 'center', color: '#8B4513', fontSize: 12, fontWeight: '600' },
+  fullPageContainer: { flex: 1, backgroundColor: '#fff' },
+  fullPageCard: { flex: 1, width: '100%', height: '100%', maxWidth: '100%', maxHeight: '100%', borderRadius: 0, elevation: 0 },
+
   loginFooterContainer: { marginTop: 20, alignItems: 'center' },
   divider: { height: 1, backgroundColor: '#FFD194', width: '80%', marginBottom: 15 },
 
@@ -4957,7 +5475,7 @@ const styles = StyleSheet.create({
   adminTabWrapper: { backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
   adminTabScroll: { paddingHorizontal: 15, paddingVertical: 12 },
   premiumTab: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12, marginRight: 8, backgroundColor: '#f1f5f9' },
-  premiumTabActive: { backgroundColor: '#6366f1' },
+  premiumTabActive: { backgroundColor: '#FF9933' },
   premiumTabText: { fontSize: 13, color: '#64748b', fontWeight: '600' },
   premiumTabTextActive: { color: '#fff' },
   
@@ -5077,7 +5595,10 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.3,
     shadowRadius: 20,
-    maxHeight: '85%' 
+    width: '100%',
+    height: '100%',
+    maxHeight: '100%',
+    borderRadius: 0
   },
   journeyHeader: { 
     padding: 35,
@@ -5162,7 +5683,7 @@ const styles = StyleSheet.create({
   journeySubtitle: {
     fontSize: 19,
     fontWeight: '700',
-    color: '#667eea',
+    color: '#D35400',
     marginBottom: 25,
     textAlign: 'center',
     letterSpacing: 0.5
@@ -5172,25 +5693,25 @@ const styles = StyleSheet.create({
   },
   journeyInputHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10
+    marginBottom: 12,
+    gap: 12
   },
   journeyInputLabel: {
     fontSize: 15,
     fontWeight: '700',
     color: '#4B5563',
-    flex: 1
+    flexShrink: 1
   },
   useCurrentBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FFF5E6',
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: '#C7D2FE',
+    borderColor: '#FFE0B2',
     elevation: 2,
     shadowColor: '#667eea',
     shadowOffset: { width: 0, height: 2 },
@@ -5204,7 +5725,7 @@ const styles = StyleSheet.create({
   useCurrentText: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#4F46E5'
+    color: '#D35400'
   },
   chooseTempleBtn: {
     flexDirection: 'row',
@@ -5302,10 +5823,10 @@ const styles = StyleSheet.create({
     minHeight: 110
   },
   travelModeButtonActive: {
-    backgroundColor: '#4f46e5',
-    borderColor: '#4338ca',
+    backgroundColor: '#FF9933',
+    borderColor: '#D35400',
     elevation: 4,
-    shadowColor: '#4f46e5',
+    shadowColor: '#FF9933',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8
@@ -5591,7 +6112,7 @@ const styles = StyleSheet.create({
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between' },
   summaryLabel: { fontSize: 12, color: '#94a3b8' },
   summaryValue: { fontSize: 12, fontWeight: 'bold', color: '#334155', flex: 1, textAlign: 'right', marginLeft: 10 },
-  confirmBookingBtn: { backgroundColor: '#4f46e5', paddingVertical: 16, borderRadius: 15, alignItems: 'center', justifyContent: 'center', elevation: 4 },
+  confirmBookingBtn: { backgroundColor: '#FF9933', paddingVertical: 16, borderRadius: 15, alignItems: 'center', justifyContent: 'center', elevation: 4 },
   confirmBookingText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
   bookingSecureNote: { textAlign: 'center', fontSize: 11, color: '#94a3b8', marginTop: 15 }
 });

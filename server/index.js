@@ -126,8 +126,14 @@ const Appointment = sequelize.define('Appointment', {
     userContact: { type: DataTypes.STRING, allowNull: false },
     guideContact: { type: DataTypes.STRING, allowNull: false },
     guideName: { type: DataTypes.STRING },
+    guideUpiId: { type: DataTypes.STRING }, // Store at time of booking
     date: { type: DataTypes.STRING, allowNull: false },
     status: { type: DataTypes.STRING, defaultValue: 'pending' }, // pending, accepted, rejected
+    amount: { type: DataTypes.INTEGER, defaultValue: 0 },
+    paymentStatus: { type: DataTypes.STRING, defaultValue: 'pending' }, // pending, completed
+    isPaidToAdmin: { type: DataTypes.BOOLEAN, defaultValue: false }, // User paid admin?
+    commissionAmount: { type: DataTypes.INTEGER, defaultValue: 0 },
+    adminCommissionStatus: { type: DataTypes.STRING, defaultValue: 'pending' }, 
     bookedAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
 });
 
@@ -180,6 +186,10 @@ const Guide = sequelize.define('Guide', {
     languages: { type: DataTypes.STRING }, // e.g. "Gujarati, Hindi"
     bio: { type: DataTypes.TEXT },
     hourlyRate: { type: DataTypes.STRING }, // e.g. "₹200/hr"
+    upiId: { type: DataTypes.STRING }, // For direct payments
+    commissionBalance: { type: DataTypes.INTEGER, defaultValue: 0 }, // Amount owed (for cash bookings)
+    withdrawableBalance: { type: DataTypes.INTEGER, defaultValue: 0 }, // Money held by admin for guide
+    debtLimit: { type: DataTypes.INTEGER, defaultValue: 500 },
     isVerified: { type: DataTypes.BOOLEAN, defaultValue: false },
     status: { type: DataTypes.STRING, defaultValue: 'active' }, // active, inactive
     rating: { type: DataTypes.FLOAT, defaultValue: 4.5 }
@@ -286,8 +296,12 @@ function checkYouTubeLive(channelUrl, callback, keywords = [], ignoreIds = []) {
                     const renderers = data.split('videoRenderer');
                     for (let i = 1; i < renderers.length; i++) {
                         const block = renderers[i];
-                        const isLive = block.includes('style="LIVE"') || block.includes('"label":"LIVE"') || block.includes('"text":"LIVE"');
-                        if (isLive) {
+                        
+                        // Strict check: Must have LIVE badge and NOT have UPCOMING/Scheduled
+                        const hasLiveBadge = block.includes('style="LIVE"') || block.includes('"label":"LIVE"') || block.includes('"text":"LIVE"') || block.includes('Watching');
+                        const isUpcoming = block.includes('style="UPCOMING"') || block.includes('"text":"Upcoming"') || block.includes('Scheduled') || block.includes('Premiere');
+                        
+                        if (hasLiveBadge && !isUpcoming) {
                             const idMatch = block.match(/"videoId":"([^"]+)"/);
                             if (idMatch) {
                                 const id = idMatch[1];
@@ -312,10 +326,9 @@ function checkYouTubeLive(channelUrl, callback, keywords = [], ignoreIds = []) {
 
                 // Case 2: Direct channel home or fallback for /live
                 if (!videoId) {
-                    const isLive = data.includes('isLive":true') || 
-                                   data.includes('"status":"LIVE"') || 
-                                   data.includes('"PLAYER_LIVE_LABEL":"Live"') || 
-                                   data.includes('style="LIVE"');
+                    const hasLiveBadge = data.includes('style="LIVE"') || data.includes('"label":"LIVE"') || data.includes('"text":"LIVE"') || data.includes('Watching');
+                    const isUpcoming = data.includes('style="UPCOMING"') || data.includes('"text":"Upcoming"') || data.includes('Scheduled') || data.includes('Premiere');
+                    const isLive = (data.includes('isLive":true') || data.includes('"status":"LIVE"')) && !isUpcoming && hasLiveBadge;
                     
                     const videoIdMatch = data.match(/"videoId":"([^"]+)"/);
                     const canonicalMatch = data.match(/link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([^"]+)"/);
@@ -912,7 +925,8 @@ app.get('/api/guides/:district', async (req, res) => {
         const guides = await Guide.findAll({ 
             where: { 
                 district: { [Op.iLike]: district.trim() },
-                status: 'active'
+                status: 'active',
+                commissionBalance: { [Op.lt]: Sequelize.col('debtLimit') } // Rapido Style: Only show guides within limit
             },
             order: [['isVerified', 'DESC'], ['rating', 'DESC']]
         });
@@ -943,13 +957,18 @@ app.post('/api/admin/verify-guide', async (req, res) => {
 // API: Book an Appointment
 app.post('/api/appointments/book', async (req, res) => {
     try {
-        const { userName, userContact, guideContact, guideName, date } = req.body;
+        const { userName, userContact, guideContact, guideName, guideUpiId, date, amount } = req.body;
         if (!userName || !userContact || !guideContact || !date) {
             return res.status(400).json({ error: "Missing required booking details" });
         }
 
+        const amountVal = amount || 0;
+        const commissionVal = Math.floor(amountVal * 0.10); // 10% Commission for Admin
+
         const appointment = await Appointment.create({
-            userName, userContact, guideContact, guideName, date
+            userName, userContact, guideContact, guideName, guideUpiId, date, 
+            amount: amountVal,
+            commissionAmount: commissionVal
         });
 
         console.log(`[BOOKING] New Request: ${userName} -> ${guideName || guideContact} on ${date}`);
@@ -1009,6 +1028,134 @@ app.get('/api/appointments/user/:contact', async (req, res) => {
     } catch (error) {
         console.error("Fetch user appointments error:", error);
         res.status(500).json({ error: "Failed to fetch appointments" });
+    }
+});
+
+// API: Admin Confirms User's Online Payment
+app.post('/api/admin/confirm-user-payment', async (req, res) => {
+    try {
+        const { id } = req.body;
+        const appointment = await Appointment.findByPk(id);
+        if (!appointment || appointment.paymentStatus === 'completed') {
+            return res.status(404).json({ error: "Invalid appointment" });
+        }
+
+        // 1. Mark appointment as paid
+        await appointment.update({ 
+            paymentStatus: 'completed',
+            isPaidToAdmin: true,
+            adminCommissionStatus: 'received'
+        });
+
+        // 2. Split: Add the remaining 90% to Guide's withdrawable balance
+        const guide = await Guide.findOne({ where: { contact: appointment.guideContact } });
+        if (guide) {
+            const guideShare = appointment.amount - appointment.commissionAmount;
+            const newWithdrawable = (guide.withdrawableBalance || 0) + guideShare;
+            await guide.update({ withdrawableBalance: newWithdrawable });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to confirm payment" });
+    }
+});
+
+// API: Guide Requests Payout (Settlement from Admin to Guide)
+app.post('/api/guide/request-payout', async (req, res) => {
+    try {
+        const { contact } = req.body;
+        const guide = await Guide.findOne({ where: { contact } });
+        if (!guide || guide.withdrawableBalance <= 0) {
+            return res.status(400).json({ error: "No balance to withdraw" });
+        }
+
+        // Mark balance as 0 (in a real app, this would queue a transfer)
+        const payoutAmount = guide.withdrawableBalance;
+        await guide.update({ withdrawableBalance: 0 });
+
+        console.log(`[PAYOUT] Guide ${guide.name} requested ₹${payoutAmount}. Transfer to: ${guide.upiId}`);
+        res.json({ success: true, amount: payoutAmount });
+    } catch (error) {
+        res.status(500).json({ error: "Payout request failed" });
+    }
+});
+
+// API: Get Guide Wallet Info
+app.get('/api/guide/wallet/:contact', async (req, res) => {
+    try {
+        const { contact } = req.params;
+        const guide = await Guide.findOne({ where: { contact } });
+        if (!guide) return res.status(404).json({ error: "Guide not found" });
+
+        res.json({
+            success: true,
+            commissionBalance: guide.commissionBalance, // For cash
+            withdrawableBalance: guide.withdrawableBalance, // From online
+            limit: guide.debtLimit,
+            isBlocked: guide.commissionBalance >= guide.debtLimit
+        });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to fetch wallet info" });
+    }
+});
+
+// API: Settle Dues (Guide Pays Admin)
+app.post('/api/guide/settle-dues', async (req, res) => {
+    try {
+        const { contact, amount } = req.body;
+        const guide = await Guide.findOne({ where: { contact } });
+        if (!guide) return res.status(404).json({ error: "Guide not found" });
+
+        const newBalance = Math.max(0, guide.commissionBalance - amount);
+        await guide.update({ commissionBalance: newBalance });
+        
+        res.json({ success: true, newBalance });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to settle dues" });
+    }
+});
+
+// API: Admin Earnings Dashboard
+app.get('/api/admin/earnings', async (req, res) => {
+    try {
+        const appointments = await Appointment.findAll({
+            where: { paymentStatus: 'completed' },
+            order: [['bookedAt', 'DESC']]
+        });
+
+        const totalEarnings = appointments.reduce((sum, app) => sum + (app.amount || 0), 0);
+        const totalCommission = appointments.reduce((sum, app) => sum + (app.commissionAmount || 0), 0);
+        const pendingCommission = appointments
+            .filter(app => app.adminCommissionStatus === 'pending')
+            .reduce((sum, app) => sum + (app.commissionAmount || 0), 0);
+
+        res.json({
+            success: true,
+            stats: {
+                totalBookings: appointments.length,
+                totalEarnings,
+                totalCommission,
+                pendingCommission
+            },
+            history: appointments
+        });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to fetch earnings" });
+    }
+});
+
+// API: Mark Commission as Received (Admin)
+app.post('/api/admin/mark-commission-received', async (req, res) => {
+    try {
+        const { id } = req.body;
+        const appointment = await Appointment.findByPk(id);
+        if (!appointment) return res.status(404).json({ error: "Appointment not found" });
+
+        await appointment.update({ adminCommissionStatus: 'received' });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to update commission status" });
     }
 });
 
@@ -1113,21 +1260,25 @@ app.post('/api/admin/generate-ai-content', async (req, res) => {
         
         Strictly follow this structure for the JSON fields:
         1. history (ઈતિહાસ અને કથા): This must be your masterpiece. Cover 'Pragatya' (ભગવાનના પ્રગટ્યની કથા), ancient legends, 'Lokvayka', Royal Connections, AND include "Guide Notes" - specific things a guide would point out (e.g., "Notice this stone...", "Look at this pillar..."). Write in deep Gujarati.
-        2. significance (મહત્વ અને રહસ્યો): Reveal hidden secrets that only local guides know. Explain rituals, mysteries, and spiritual benefits.
-        3. architecture (સ્થાપત્ય દર્શન): Don't just list styles. Walk the user through the temple. "As you enter the main gate...", "Observe the carving on the dome...". Write in Gujarati.
+        2. localStories (સ્થાનિક કથાઓ અને માન્યતાઓ): (NEW) Include unheard stories, miracles reported by locals, and folklore that isn't in official history books. Write in deep Gujarati.
+        3. hiddenGems (છુપાયેલા રહસ્યો અને વિશેષતાઓ): (NEW) Mention secret spots in or around the temple, specific carvings to look for, or nearby hidden spiritual places that general tourists miss. Write in deep Gujarati.
+        4. significance (મહત્વ અને રહસ્યો): Reveal hidden secrets that only local guides know. Explain rituals, mysteries, and spiritual benefits.
+        5. architecture (સ્થાપત્ય દર્શન): Don't just list styles. Walk the user through the temple. "As you enter the main gate...", "Observe the carving on the dome...". Write in Gujarati.
 
         Provide the response in a JSON format with exactly these fields:
         {
           "name_gu": "Temple name in Gujarati",
           "name_hi": "Temple name in Hindi",
           "name_en": "Temple name in English",
-          "history": "Comprehensive Guide Script: Pragatya, History, Folklore, and 'Guide-style' tours (પ્રગટ્ય, ઇતિહાસ, લોકવાયકા, અને ગાઈડ જેવી ખાસ માહિતી) in Gujarati",
+          "history": "Comprehensive Guide Script in Gujarati",
+          "localStories": "Unheard local stories and folklore about the temple in Gujarati",
+          "hiddenGems": "Hidden spots and special observations in and around the temple in Gujarati",
           "architecture": "Virtual Architectural Tour (સ્થાપત્ય દર્શન) in Gujarati",
           "significance": "Hidden Secrets, Rituals & Spiritual Significance (રહસ્યો અને મહત્વ) in Gujarati",
-          "district": "Exact District Name (e.g., Gir Somnath, Devbhumi Dwarka, Kheda, Ahmedabad) in English",
-          "bestTimeToVisit": "Best time to visit (e.g., During Aarti, specific festivals) in Gujarati",
-          "howToReach": "Detailed Travel Guide (કેવી રીતે પહોંચવું) in Gujarati",
-          "nearbyAttractions": "List of nearby attractions INCLUDING Historical Places. Format each as: 'Place Name - Short Description (Distance)'. Write in Gujarati.",
+          "district": "Exact District Name in English",
+          "bestTimeToVisit": "Best time to visit in Gujarati",
+          "howToReach": "Detailed Travel Guide in Gujarati",
+          "nearbyAttractions": "List of nearby attractions in Gujarati",
           "history_en": "Comprehensive History & Guide notes in English",
           "history_hi": "Comprehensive History & Guide notes in Hindi"
         }`;
@@ -1140,6 +1291,12 @@ app.post('/api/admin/generate-ai-content', async (req, res) => {
         const response = await result.response;
         const text = response.text();
         const generatedData = JSON.parse(text);
+
+        // Normalize fields that might be returned as arrays by AI
+        if (Array.isArray(generatedData.nearbyAttractions)) {
+            generatedData.nearbyAttractions = generatedData.nearbyAttractions.join('\n');
+        }
+
         res.json({ success: true, data: generatedData });
     } catch (error) {
         console.error("Gemini Gen Error:", error);
@@ -1370,6 +1527,19 @@ app.post('/api/generate-journey-guide', async (req, res) => {
           "highwayName": "Main highway name (e.g., NH-27, SH-31)",
           "estimatedDistance": "Approximate road distance in km",
           "estimatedTime": "Approximate travel time",
+          "travelOptions": [
+            {
+              "mode": "Mode name (Train/Flight/Road) in ${langName}",
+              "duration": "Duration in ${langName}",
+              "approxCost": "Approximate cost range for a family in ${langName}",
+              "prosCons": "Pros and cons in ${langName}"
+            }
+          ],
+          "destinationPlan": {
+            "topHotels": "Top 3-5 recommended hotels at the destination with approx price category in ${langName}",
+            "localTourPlan": "A 1-2 day suggested local sightseeing plan at the destination in ${langName}",
+            "localTravelRent": "Typical prices for Auto, Taxi, and Rent-a-car/bike at the destination in ${langName}"
+          },
           "stops": [
             {
               "name": "Stop Name",
@@ -1398,7 +1568,9 @@ app.post('/api/generate-journey-guide', async (req, res) => {
             title: responseData.routeTitle,
             routePath: responseData.routePath || '',
             distance: responseData.estimatedDistance,
-            estimatedTime: responseData.estimatedTime || 'Calculating...'
+            estimatedTime: responseData.estimatedTime || 'Calculating...',
+            travelOptions: responseData.travelOptions || [],
+            destinationPlan: responseData.destinationPlan || null
         });
     } catch (error) {
         console.error("Journey Generation Error:", error);
@@ -1549,11 +1721,19 @@ app.post('/api/admin/add-temple', async (req, res) => {
             return res.status(400).json({ error: "Missing required fields" });
         }
 
+        // Normalize nearbyAttractions if it's an array
+        let finalNearbyAttractions = nearbyAttractions;
+        if (Array.isArray(nearbyAttractions)) {
+            finalNearbyAttractions = nearbyAttractions.join('\n');
+        } else if (typeof nearbyAttractions === 'object' && nearbyAttractions !== null) {
+            finalNearbyAttractions = JSON.stringify(nearbyAttractions);
+        }
+
         const temple = await Temple.create({ 
             state, district, name, name_en, name_hi, description, liveVideoId, location, history,
             history_en, history_hi, architecture, architecture_en, architecture_hi,
             significance, significance_en, significance_hi,
-            bestTimeToVisit, howToReach, nearbyAttractions, liveChannelUrl, aartiTimings, imageUrl
+            bestTimeToVisit, howToReach, nearbyAttractions: finalNearbyAttractions, liveChannelUrl, aartiTimings, imageUrl
         });
 
         // Trigger an immediate live check if a channel URL was provided
@@ -1585,9 +1765,12 @@ app.post('/api/admin/update-temple', async (req, res) => {
         const updateData = { ...req.body };
         delete updateData.id;
 
-        // Ensure we don't accidentally wipe fields if the frontend sends partial updates
-        // (Sequelize update handles partials automatically if we pass the object, 
-        // but here we are spreading the whole body. That is fine as long as frontend sends what it wants to update)
+        // Normalize nearbyAttractions if it's an array/object
+        if (Array.isArray(updateData.nearbyAttractions)) {
+            updateData.nearbyAttractions = updateData.nearbyAttractions.join('\n');
+        } else if (typeof updateData.nearbyAttractions === 'object' && updateData.nearbyAttractions !== null) {
+            updateData.nearbyAttractions = JSON.stringify(updateData.nearbyAttractions);
+        }
 
         const [updated] = await Temple.update(updateData, {
              where: id ? { id } : { name }
@@ -1647,7 +1830,7 @@ app.listen(port, '0.0.0.0', async () => {
     // Initial status check
     setTimeout(updateAllLiveStatuses, 5000);
     // Recurring check every 10 mins
-    setInterval(updateAllLiveStatuses, 10 * 60 * 1000);
+    setInterval(updateAllLiveStatuses, 2 * 60 * 1000);
 
     const { networkInterfaces } = require('os');
     const nets = networkInterfaces();
