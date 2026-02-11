@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, ScrollView, ActivityIndicator, RefreshControl, Platform, TouchableOpacity, Image, LogBox, useWindowDimensions, TextInput, Alert, KeyboardAvoidingView, Modal, Linking, Share } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, ActivityIndicator, RefreshControl, Platform, TouchableOpacity, Image, LogBox, useWindowDimensions, TextInput, Alert, KeyboardAvoidingView, Modal, Linking, Share, SafeAreaView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
@@ -10,11 +10,12 @@ LogBox.ignoreAllLogs();
 LogBox.ignoreLogs(['expo-notifications: Android Push notifications']);
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import * as Speech from 'expo-speech';
+
 import * as Location from 'expo-location';
 import { WebView } from 'react-native-webview';
 import YoutubePlayer from 'react-native-youtube-iframe';
 import * as ImagePicker from 'expo-image-picker';
+import io from 'socket.io-client';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -28,7 +29,7 @@ Notifications.setNotificationHandler({
 
 // Bypass firewall issues by using the public tunnel URL
 // 1. USE LAN IP (Most Stable)
-const API_URL = 'https://74e4-103-105-235-239.ngrok-free.app/api/temples';
+const API_URL = 'https://73bd-103-105-235-239.ngrok-free.app/api/temples';
 
 
 
@@ -629,7 +630,7 @@ const needsTranslation = (temple, lang) => {
 export default function App() {
   const [templeData, setTempleData] = useState([]); 
   const [selectedTemple, setSelectedTemple] = useState(null); 
-  const [isSpeaking, setIsSpeaking] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -711,11 +712,46 @@ export default function App() {
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [reviewedAppointments, setReviewedAppointments] = useState(new Set());
   
+  // Story States
+  const [isStoriesVisible, setIsStoriesVisible] = useState(false);
+  const [activeStories, setActiveStories] = useState([]);
+  const [selectedGuideStories, setSelectedGuideStories] = useState(null);
+  const [currentStoryIndex, setCurrentStoryIndex] = useState(0);
+  const [isLoadingStories, setIsLoadingStories] = useState(false);
+  const [isCreateStoryVisible, setIsCreateStoryVisible] = useState(false);
+  const [storyCaption, setStoryCaption] = useState('');
+  const [storyLocation, setStoryLocation] = useState('');
+  const [storyImage, setStoryImage] = useState(null);
+  const [storyImages, setStoryImages] = useState([]); // Multiple images support
+  const [isUploadingStory, setIsUploadingStory] = useState(false);
+  
+  // Translation States (Story)
+  const [storyTranslationText, setStoryTranslationText] = useState(null);
+  const [isTranslatingStory, setIsTranslatingStory] = useState(false);
+  const [showStoryTranslation, setShowStoryTranslation] = useState(false);
+  const [storyTargetLang, setStoryTargetLang] = useState('en'); // 'en', 'hi', 'gu'
+
+  
   // Admin States
   const [isAdminVisible, setIsAdminVisible] = useState(false);
   const [activeAdminTab, setActiveAdminTab] = useState('suggestions'); // 'suggestions', 'ratings', 'addTemple'
   const [adminSuggestions, setAdminSuggestions] = useState([]);
-  const [adminRatings, setAdminRatings] = useState([]);
+  const [isChatVisible, setIsChatVisible] = useState(false);
+  const [chatReceiver, setChatReceiver] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [socket, setSocket] = useState(null);
+  const [isCancelModalVisible, setIsCancelModalVisible] = useState(false);
+  const [cancelReasonText, setCancelReasonText] = useState('');
+  const [appointmentToCancel, setAppointmentToCancel] = useState(null);
+  // AI Landmark Scanner States
+  const [isScannerVisible, setIsScannerVisible] = useState(false);
+  const [scanResult, setScanResult] = useState(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scannedImage, setScannedImage] = useState(null);
+  const [isDetailedInfoVisible, setIsDetailedInfoVisible] = useState(false);
+  const [detailedInfo, setDetailedInfo] = useState(null);
+  const [isLoadingDetailedInfo, setIsLoadingDetailedInfo] = useState(false);
   const [adminGuides, setAdminGuides] = useState([]);
   const [newTemple, setNewTemple] = useState({ 
     state: 'ગુજરાત', 
@@ -760,7 +796,68 @@ export default function App() {
 
   useEffect(() => {
     registerForPushNotificationsAsync();
+    fetchActiveStories(); // Fetch stories on app load
+    
+    // Refresh stories every 5 minutes
+    const storiesInterval = setInterval(fetchActiveStories, 5 * 60 * 1000);
+    return () => clearInterval(storiesInterval);
   }, []);
+
+  // Reset translation and stop speech when story changes
+  useEffect(() => {
+    Speech.stop();
+    setIsSpeaking(false);
+    setStoryTranslationText(null);
+    setShowStoryTranslation(false);
+  }, [currentStoryIndex, isStoriesVisible]);
+
+  // Stop speech when detailed info modal closes
+  useEffect(() => {
+    if (!isDetailedInfoVisible) {
+      Speech.stop();
+      setIsSpeaking(false);
+    }
+  }, [isDetailedInfoVisible]);
+  
+  // Socket.io Connection & Logic (Replaces Polling)
+  useEffect(() => {
+    const newSocket = io(API_URL.replace('/api', ''), {
+        transports: ['websocket'], // Force WebSocket if possible
+        jsonp: false
+    });
+    setSocket(newSocket);
+    return () => newSocket.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (socket && user) {
+        socket.emit('join', user.contact); // Join my room
+        
+        const handleMsg = (msg) => {
+            if (chatReceiver && (msg.senderContact === chatReceiver.contact || msg.receiverContact === chatReceiver.contact)) {
+                setChatMessages(prev => {
+                    if (prev.find(m => m.id === msg.id)) return prev;
+                    return [...prev, msg];
+                });
+            }
+        };
+
+        socket.on('receive_message', handleMsg);
+        
+        // Notification Listener (Booking Updates)
+        const handleNotification = (data) => {
+             Alert.alert(data.title, data.body);
+             fetchUserAppointments();
+             fetchGuideAppointments();
+        };
+        socket.on('notification', handleNotification);
+
+        return () => {
+             socket.off('receive_message', handleMsg);
+             socket.off('notification', handleNotification);
+        };
+    }
+  }, [socket, user, chatReceiver]);
 
   useEffect(() => {
     if (user) {
@@ -835,6 +932,44 @@ export default function App() {
       }
   };
 
+  const handleUserCancelBooking = (appointment) => {
+      if(appointment.status === 'completed' || appointment.status === 'cancelled') {
+          Alert.alert("Cannot Cancel", "This booking is already completed or cancelled.");
+          return;
+      }
+      setAppointmentToCancel(appointment);
+      setCancelReasonText('');
+      setIsCancelModalVisible(true);
+  };
+
+  const handleSubmitCancel = async () => {
+      if(!cancelReasonText.trim()) {
+          Alert.alert("Required", "Please enter a reason");
+          return;
+      }
+      
+      try {
+           const url = API_URL.replace('/temples', '/appointments/update-status');
+           const response = await fetch(url, {
+               method: 'POST',
+               headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+               body: JSON.stringify({ 
+                   id: appointmentToCancel.id, 
+                   status: 'cancelled',
+                   reason: cancelReasonText
+               })
+           });
+           const data = await response.json();
+           if(data.success) {
+               Alert.alert("Cancelled", "Booking has been cancelled.");
+               fetchUserAppointments();
+               setIsCancelModalVisible(false);
+           } else {
+               Alert.alert("Error", "Failed to cancel");
+           }
+      } catch(e) { Alert.alert("Error", "Network error"); }
+  };
+
   const handleConfirmPayment = async (id) => {
       try {
           const url = API_URL.replace('/temples', '/appointments/mark-paid');
@@ -846,10 +981,377 @@ export default function App() {
           const data = await response.json();
           if (data.success) {
               fetchGuideAppointments();
-              Alert.alert("Success", "Payment confirmed successfully!");
+              Alert.alert("Success", "Payment confirmed!");
+          }
+      } catch (e) { Alert.alert("Error", "Failed to mark paid"); }
+  };
+
+  const handlePickImageAndIdentify = async (useCamera = false) => {
+    try {
+      let result;
+      if (useCamera) {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert("Permission Required", "Please allow camera access to scan landmarks.");
+          return;
+        }
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: true,
+          quality: 0.7,
+        });
+      } else {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert("Permission Required", "Please allow gallery access to upload photos.");
+          return;
+        }
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: true,
+          quality: 0.7,
+        });
+      }
+
+      if (!result.canceled && result.assets && result.assets[0].uri) {
+        setScannedImage(result.assets[0].uri);
+        setIsScanning(true);
+        setIsScannerVisible(true);
+        setScanResult(null);
+
+        const formData = new FormData();
+        formData.append('image', {
+          uri: result.assets[0].uri,
+          name: 'scan.jpg',
+          type: 'image/jpeg',
+        });
+        formData.append('language', language); // Send current language
+
+        const url = API_URL.replace('/temples', '/analyze-image');
+        const response = await fetch(url, {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'Content-Type': 'multipart/form-data',
+            'ngrok-skip-browser-warning': 'true',
+          },
+        });
+
+        const data = await response.json();
+        if (data.success) {
+          setScanResult(data.analysis);
+        } else {
+          Alert.alert("Error", data.error || "Failed to identify image.");
+          setIsScannerVisible(false);
+        }
+      }
+    } catch (error) {
+      console.error("Scan Error:", error);
+      Alert.alert("Error", "Something went wrong during scan.");
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  const handleGetDetailedInfo = async (placeName) => {
+    try {
+      setIsLoadingDetailedInfo(true);
+      setDetailedInfo(null);
+      setIsDetailedInfoVisible(true);
+
+      const url = API_URL.replace('/temples', '/analyze-image/detailed');
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: JSON.stringify({
+          placeName: placeName,
+          language: language
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        setDetailedInfo(data.detailedInfo);
+      } else {
+        Alert.alert("Error", data.error || "Failed to get detailed information.");
+        setIsDetailedInfoVisible(false);
+      }
+    } catch (error) {
+      console.error("Detailed Info Error:", error);
+      Alert.alert("Error", "Failed to fetch detailed information.");
+      setIsDetailedInfoVisible(false);
+    } finally {
+      setIsLoadingDetailedInfo(false);
+    }
+  };
+
+  // Story Functions
+  const fetchActiveStories = async () => {
+      setIsLoadingStories(true);
+      try {
+          const url = API_URL.replace('/temples', '/stories/active');
+          const response = await fetch(url, { headers: { 'ngrok-skip-browser-warning': 'true' } });
+          const data = await response.json();
+          if (Array.isArray(data)) {
+              setActiveStories(data);
           }
       } catch (e) {
-          Alert.alert("Error", "Failed to confirm payment");
+          console.error("Error fetching stories:", e);
+      } finally {
+          setIsLoadingStories(false);
+      }
+  };
+
+  const handleCreateStory = async () => {
+    // Determine data source: single or multiple
+    const imagesToProcess = storyImages.length > 0 ? storyImages : (storyImage ? [storyImage] : []);
+
+    if (imagesToProcess.length === 0) {
+        Alert.alert("Error", "Please select an image for your story");
+        return;
+    }
+
+    if (!user || (!user.contact && !user.email)) {
+        Alert.alert("Error", "User identification missing");
+        return;
+    }
+
+    setIsUploadingStory(true);
+    let successCount = 0;
+
+    try {
+        const url = API_URL.replace('/temples', '/stories/create'); // Construct URL outside loop
+
+        for (let i = 0; i < imagesToProcess.length; i++) {
+            const img = imagesToProcess[i];
+            const formData = new FormData();
+            
+            formData.append('media', {
+                uri: img.uri,
+                type: 'image/jpeg',
+                name: `story_${Date.now()}_${i}.jpg`
+            });
+            formData.append('guideContact', user.contact || user.email);
+            formData.append('guideName', user.name || 'Guide');
+            formData.append('caption', storyCaption); // Same caption for all
+            formData.append('location', storyLocation);
+            formData.append('mediaType', 'image');
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'ngrok-skip-browser-warning': 'true' }, // multipart/form-data provided automatically by fetch when body is FormData
+                    body: formData
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    successCount++;
+                } else {
+                    console.error(`Failed to upload image ${i+1}:`, data.error);
+                }
+            } catch (err) {
+                console.error(`Error uploading image ${i+1}:`, err);
+            }
+        }
+
+        if (successCount > 0) {
+             Alert.alert("Success", `${successCount} stories created successfully!`);
+             setIsCreateStoryVisible(false);
+             setStoryImage(null);
+             setStoryImages([]);
+             setStoryCaption('');
+             setStoryLocation('');
+             fetchActiveStories();
+        } else {
+             Alert.alert("Error", "Failed to upload stories");
+        }
+
+    } catch (e) {
+        console.error("Error creating stories:", e);
+        Alert.alert("Error", "Failed to upload stories");
+    } finally {
+        setIsUploadingStory(false);
+    }
+  };
+
+  const handlePickStoryImage = () => {
+      Alert.alert(
+          "Select Image",
+          "Choose an image source",
+          [
+              {
+                  text: "Camera",
+                  onPress: handleCameraCapture
+              },
+              {
+                  text: "Gallery",
+                  onPress: handleGallerySelection
+              },
+              {
+                  text: "Cancel",
+                  style: "cancel"
+              }
+          ]
+      );
+  };
+
+  const handleCameraCapture = async () => {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+          Alert.alert('Permission Required', 'Please grant camera permissions');
+          return;
+      }
+      
+      const result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: true,
+          aspect: [9, 16],
+          quality: 0.8,
+      });
+
+      if (!result.canceled) {
+          setStoryImage(result.assets[0]);
+          setStoryImages([]); // Clear multiple selection
+      }
+  };
+
+  const handleGallerySelection = async () => {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+          Alert.alert('Permission Required', 'Please grant camera roll permissions');
+          return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: false, // Multiple selection doesn't support cropping
+          allowsMultipleSelection: true,
+          selectionLimit: 10,
+          quality: 0.8,
+      });
+
+      if (!result.canceled) {
+          if (result.assets.length > 0) {
+              setStoryImage(result.assets[0]); // Preview first image
+              setStoryImages(result.assets);   // Store all selected
+          }
+      }
+  };
+
+  const handleTranslateStory = async (targetLang) => {
+      // If no language specified, default to English or last selected
+      const lang = targetLang || storyTargetLang || 'en';
+      setStoryTargetLang(lang);
+      
+      const story = selectedGuideStories?.stories[currentStoryIndex];
+      if (!story || (!story.caption && !story.location)) return;
+
+      setIsTranslatingStory(true);
+      setShowStoryTranslation(true); // Optimistic show
+      
+      try {
+          const contentMap = {};
+          if (story.caption) contentMap.caption = story.caption;
+          if (story.location) contentMap.location = story.location;
+
+          const response = await fetch(`${API_URL.replace('/temples', '/translate')}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  bulk: true,
+                  contentMap: contentMap,
+                  targetLang: lang
+              })
+          });
+
+          const data = await response.json();
+          if (data.translated) {
+              setStoryTranslationText(data.translated);
+              setShowStoryTranslation(true);
+          }
+      } catch (error) {
+          console.error("Translation error:", error);
+          Alert.alert("Error", "Translation unavailable");
+          setShowStoryTranslation(false); // Revert if failed
+      } finally {
+          setIsTranslatingStory(false);
+      }
+  };
+
+  const handleViewStory = async (storyId) => {
+      if (!user) return;
+      
+      try {
+          const url = API_URL.replace('/temples', '/stories/view');
+          await fetch(url, {
+              method: 'POST',
+              headers: { 
+                  'Content-Type': 'application/json',
+                  'ngrok-skip-browser-warning': 'true' 
+              },
+              body: JSON.stringify({
+                  storyId,
+                  viewerContact: user.contact,
+                  viewerName: user.name
+              })
+          });
+      } catch (e) {
+          console.error("Error recording story view:", e);
+      }
+  };
+
+  const openGuideStories = (guideStories) => {
+      setSelectedGuideStories(guideStories);
+      setCurrentStoryIndex(0);
+      setIsStoriesVisible(true);
+      if (guideStories.stories && guideStories.stories.length > 0) {
+          handleViewStory(guideStories.stories[0].id);
+      }
+  };
+
+  const nextStory = () => {
+      if (!selectedGuideStories) return;
+      
+      if (currentStoryIndex < selectedGuideStories.stories.length - 1) {
+          const newIndex = currentStoryIndex + 1;
+          setCurrentStoryIndex(newIndex);
+          handleViewStory(selectedGuideStories.stories[newIndex].id);
+      } else {
+          // Move to next guide's stories
+          const currentGuideIndex = activeStories.findIndex(
+              g => g.guideContact === selectedGuideStories.guideContact
+          );
+          if (currentGuideIndex < activeStories.length - 1) {
+              const nextGuide = activeStories[currentGuideIndex + 1];
+              openGuideStories(nextGuide);
+          } else {
+              setIsStoriesVisible(false);
+          }
+      }
+  };
+
+  const previousStory = () => {
+      if (!selectedGuideStories) return;
+      
+      if (currentStoryIndex > 0) {
+          const newIndex = currentStoryIndex - 1;
+          setCurrentStoryIndex(newIndex);
+          handleViewStory(selectedGuideStories.stories[newIndex].id);
+      } else {
+          // Move to previous guide's stories
+          const currentGuideIndex = activeStories.findIndex(
+              g => g.guideContact === selectedGuideStories.guideContact
+          );
+          if (currentGuideIndex > 0) {
+              const prevGuide = activeStories[currentGuideIndex - 1];
+              setSelectedGuideStories(prevGuide);
+              setCurrentStoryIndex(prevGuide.stories.length - 1);
+              handleViewStory(prevGuide.stories[prevGuide.stories.length - 1].id);
+          }
       }
   };
 
@@ -1002,6 +1504,76 @@ export default function App() {
       } finally {
           setIsSubmittingReview(false);
       }
+  };
+
+  /* --- SECURE COMMUNICATION CLIENT LOGIC --- */
+  const handleSecureCall = async (appointment) => {
+      Alert.alert(
+          "Secure Call (Privacy Protected)",
+          "Connecting call via Virtual Number. Your real number stays hidden. 🔒",
+          [
+              { text: "Cancel", style: "cancel" },
+              { 
+                 text: "Call Now 📞", 
+                 onPress: async () => {
+                     try {
+                         const url = API_URL.replace('/temples', '/call/secure-bridge');
+                         const response = await fetch(url, {
+                             method: 'POST',
+                             headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+                             body: JSON.stringify({
+                                 userContact: user.contact,
+                                 guideContact: appointment.guideContact
+                             })
+                         });
+                         const data = await response.json();
+                         if(data.success) Alert.alert("In Progress", "You will receive a call shortly connecting you to the guide.");
+                         else Alert.alert("Error", data.error || "Call failed");
+                     } catch(e) { Alert.alert("Error", "Call failed"); }
+                 }
+              }
+          ]
+      );
+  };
+  
+  const handleOpenChat = (appointment) => {
+      setChatReceiver({
+          contact: appointment.guideContact,
+          name: appointment.guideName
+      });
+      setChatMessages([]);
+      setIsChatVisible(true);
+      fetchChat(appointment.guideContact);
+  };
+  
+  const fetchChat = async (contact) => {
+      if(!contact || !user) return;
+      try {
+          const url = API_URL.replace('/temples', `/chat/history?user1=${user.contact}&user2=${contact}`);
+          const response = await fetch(url, { headers: { 'ngrok-skip-browser-warning': 'true' } });
+          const data = await response.json();
+          if(Array.isArray(data)) setChatMessages(data);
+      } catch(e) { console.log("Chat fetch error", e); }
+  };
+  
+  const handleSendMessage = async () => {
+      if(!chatInput.trim() || !chatReceiver) return;
+      try {
+          const text = chatInput.trim();
+          setChatInput(''); 
+          
+          const url = API_URL.replace('/temples', '/chat/send');
+          await fetch(url, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+              body: JSON.stringify({
+                  senderContact: user.contact,
+                  receiverContact: chatReceiver.contact,
+                  text: text
+              })
+          });
+          // fetchChat(chatReceiver.contact); // SOCKET handles update now
+      } catch(e) { Alert.alert("Error", "Failed to send"); }
   };
 
   // Auto-prompt to translate if content is missing when language changes
@@ -1738,19 +2310,6 @@ export default function App() {
     fetchAdminSuggestions();
     fetchAdminEarnings();
   };
-  const toggleSpeech = (text) => {
-    if (isSpeaking) {
-      Speech.stop();
-      setIsSpeaking(false);
-    } else {
-      setIsSpeaking(true);
-      Speech.speak(text, {
-        language: language === 'gu' ? 'gu-IN' : language === 'hi' ? 'hi-IN' : 'en-US',
-        onDone: () => setIsSpeaking(false),
-        onError: () => setIsSpeaking(false),
-      });
-    }
-  };
 
   const handleGetCurrentLocation = async () => {
     try {
@@ -2198,7 +2757,7 @@ export default function App() {
       const shareMessage = language === 'gu' 
         ? `"${templeName}" ના લાઈવ દર્શન અત્યારે જ "દિવ્ય દર્શન" એપ પર જુઓ! 🙏✨\n\nડાઉનલોડ લિંક: ${appUrl}`
         : (language === 'hi' 
-            ? `"${templeName}" के लाइव दर्शन अभी "दिव्य दर्शन" ऐप પર देखें! 🙏✨\n\nडाउनलोड લિંક: ${appUrl}`
+            ? `"${templeName}" के लाइव दर्शन अभी "दिव्य दर्शन" ऐप पर देखें! 🙏✨\n\nडाउनलोड लिंक: ${appUrl}`
             : `Watch Live Darshan of "${templeName}" on "Divya Darshan" app! 🙏✨\n\nDownload Link: ${appUrl}`);
             
       await Share.share({
@@ -2513,12 +3072,34 @@ export default function App() {
                                             </TouchableOpacity>
                                         )}
 
-                                        <TouchableOpacity 
-                                            style={[styles.smallBtn, {backgroundColor: '#25D366', marginBottom: 8, flexDirection: 'row', justifyContent: 'center'}]}
-                                            onPress={() => Linking.openURL(`whatsapp://send?phone=${item.guideContact}&text=Hi, I booked you as a guide for ${item.date}`)}
-                                        >
-                                            <Text style={{color: '#fff', fontWeight: 'bold'}}>Chat on WhatsApp</Text>
-                                        </TouchableOpacity>
+                                            {/* Secure Chat */}
+                                            <TouchableOpacity 
+                                                style={[styles.smallBtn, {backgroundColor: '#0c4a6e', marginBottom: 8, flexDirection: 'row', justifyContent: 'center'}]}
+                                                onPress={() => handleOpenChat(item)}
+                                            >
+                                                <Ionicons name="chatbubbles" size={16} color="#fff" style={{marginRight: 6}} />
+                                                <Text style={{color: '#fff', fontWeight: 'bold'}}>Secure Chat 💬</Text>
+                                            </TouchableOpacity>
+
+                                            {/* Secure Call */}
+                                            <TouchableOpacity 
+                                                style={[styles.smallBtn, {backgroundColor: '#1E88E5', marginBottom: 8, flexDirection: 'row', justifyContent: 'center'}]}
+                                                onPress={() => handleSecureCall(item)}
+                                            >
+                                                <Ionicons name="call" size={16} color="#fff" style={{marginRight: 6}} />
+                                                <Text style={{color: '#fff', fontWeight: 'bold'}}>Secure Call 📞</Text>
+                                            </TouchableOpacity>
+
+                                            {/* Cancel Button */}
+                                            {(item.status === 'pending' || item.status === 'accepted') && (
+                                                <TouchableOpacity 
+                                                    style={[styles.smallBtn, {backgroundColor: '#ef4444', marginBottom: 8, flexDirection: 'row', justifyContent: 'center'}]}
+                                                    onPress={() => handleUserCancelBooking(item)}
+                                                >
+                                                    <Ionicons name="close-circle" size={16} color="#fff" style={{marginRight: 6}} />
+                                                    <Text style={{color: '#fff', fontWeight: 'bold'}}>Cancel Booking ❌</Text>
+                                                </TouchableOpacity>
+                                            )}
                                         
                                         {!reviewedAppointments.has(item.id) && (
                                             <TouchableOpacity 
@@ -2618,7 +3199,7 @@ export default function App() {
                                         />
                                         <View style={styles.offlineOverlay}>
                                             <Text style={styles.offlineText}>{language === 'gu' ? 'લાઇવ ઉપલબ્ધ નથી' : (language === 'hi' ? 'लाइव उपलब्ध नहीं है' : 'Live Not Available')}</Text>
-                                            <Text style={styles.offlineSubText}>{language === 'gu' ? 'મંદિર ના દર્શન' : (language === 'hi' ? 'मंदिर के दर्शन' : 'Temple View')}</Text>
+                                            <Text style={styles.offlineSubText}>{language === 'gu' ? 'મંદિર ના દર્શન' : (language === 'hi' ? 'मंदिर के દર્શન' : 'Temple View')}</Text>
                                         </View>
                                     </>
                                 ) : (
@@ -2696,31 +3277,6 @@ export default function App() {
                                     </TouchableOpacity>
                                 ))}
                             </View>
-
-                            <View style={{paddingHorizontal: 15, marginBottom: 15}}>
-                                <TouchableOpacity 
-                                    style={[styles.audioBtn, isSpeaking && styles.audioBtnActive, {width: '100%'}]} 
-                                    onPress={() => {
-                                        const textToSpeak = (language === 'en' && selectedTemple.history_en) ? selectedTemple.history_en :
-                                                          (language === 'hi' && selectedTemple.history_hi) ? selectedTemple.history_hi :
-                                                          (selectedTemple.history || "No story available");
-                                        toggleSpeech(textToSpeak);
-                                    }}
-                                >
-                                    <LinearGradient
-                                        colors={isSpeaking ? ['#ef4444', '#b91c1c'] : ['#4f46e5', '#3730a3']}
-                                        style={[styles.audioGradient, {borderRadius: 12}]}
-                                    >
-                                        <Text style={styles.audioBtnText}>
-                                            {isSpeaking 
-                                                ? (language === 'gu' ? '🛑 વર્ણન રોકો' : (language === 'hi' ? '🛑 वर्णन रोकें' : '🛑 Stop Guide'))
-                                                : (language === 'gu' ? '🔊 વર્ણન સાંભળો' : (language === 'hi' ? '🔊 वर्णन सुनें' : '🔊 Play Guide'))
-                                            }
-                                        </Text>
-                                    </LinearGradient>
-                                </TouchableOpacity>
-                            </View>
-
                             <View style={styles.guideContent}>
                                 {/* Global Translate Button */}
                                 {needsTranslation(selectedTemple, language) && (
@@ -2799,7 +3355,7 @@ export default function App() {
                                 {/* Nearby */}
                                 {selectedTemple.nearbyAttractions && (
                                     <View style={styles.guideSection}>
-                                        <Text style={styles.guideSectionTitle}>🏞️ {language === 'gu' ? 'જોવાલાયક નજીકના સ્થળો' : (language === 'hi' ? 'आसपास के आकर्षण' : 'Nearby Attractions')}</Text>
+                                        <Text style={styles.guideSectionTitle}>🏞️ {language === 'gu' ? 'જોવાલાયક નજીકના સ્થળો' : (language === 'hi' ? 'આસપાસ કે આકર્ષણ' : 'Nearby Attractions')}</Text>
                                         <Text style={styles.guideText}>
                                             {getTempleTranslation(selectedTemple, 'nearbyAttractions', language)}
                                         </Text>
@@ -2816,18 +3372,37 @@ export default function App() {
       ) : (
         <View style={{flex: 1}}>
       <StatusBar style="light" />
-      <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.header}>
-        <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'}}>
-            <TouchableOpacity style={styles.menuButton} onPress={() => setIsMenuVisible(true)}>
-                <Text style={styles.menuText}>☰</Text>
+      <LinearGradient colors={['#FF9933', '#FF512F']} style={[styles.header, {paddingTop: Platform.OS === 'android' ? 45 : 60}]}>
+        <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%'}}>
+            <TouchableOpacity onPress={() => setIsMenuVisible(true)} style={{padding: 5}}>
+                <Ionicons name="menu" size={32} color="#fff" />
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>{language === 'gu' ? 'દિવ્ય દર્શન' : (language === 'hi' ? 'दिव्य दर्शन' : 'Divya Darshan')}</Text>
-            <View style={{width: 40}} /> 
+            
+            <Text style={[styles.headerTitle, {flex: 1, textAlign: 'center', marginTop: 0}]}>
+                {language === 'gu' ? 'દિવ્ય દર્શન' : (language === 'hi' ? 'दिव्य દર્શન' : 'Divya Darshan')}
+            </Text>
+            
+            <TouchableOpacity 
+                style={{padding: 5}} 
+                onPress={() => {
+                    Alert.alert(
+                        language === 'gu' ? 'સ્થળ ઓળખો (AI Scan)' : 'Identify Landmark (AI)',
+                        language === 'gu' ? 'તમારા ફોટા દ્વારા સ્થળની માહિતી મેળવો' : 'Get details via photo',
+                        [
+                            { text: language === 'gu' ? '📷 કેમેરા' : '📷 Camera', onPress: () => handlePickImageAndIdentify(true) },
+                            { text: language === 'gu' ? '🖼️ ગેલેરી' : '🖼️ Gallery', onPress: () => handlePickImageAndIdentify(false) },
+                            { text: language === 'gu' ? 'રદ કરો' : 'Cancel', style: 'cancel' }
+                        ]
+                    );
+                }}
+            >
+                <Ionicons name="scan-circle" size={32} color="#fff" />
+            </TouchableOpacity> 
         </View>
         
         <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10}}>
             <Text style={styles.headerSubtitle}>
-                {language === 'gu' ? 'સ્વાગત છે,' : (language === 'hi' ? 'स्वागत है,' : 'Welcome,')} {user ? user.name : (language === 'gu' ? 'અતિથિ ભક્ત' : (language === 'hi' ? 'अतिथि भक्त' : 'Guest Devotee'))}
+                {language === 'gu' ? 'સ્વાગત છે,' : (language === 'hi' ? 'સ્વાગત છે,' : 'Welcome,')} {user ? user.name : (language === 'gu' ? 'અતિથિ ભક્ત' : (language === 'hi' ? 'અતિથિ ભક્ત' : 'Guest Devotee'))}
             </Text>
             
             <View style={styles.headerLangContainer}>
@@ -2876,7 +3451,7 @@ export default function App() {
                         {getTranslation('myBookings', language)}
                     </Text>
                     <Text style={{fontSize: 11, color: '#42A5F5', marginTop: 2}}>
-                        {language === 'gu' ? `તમારી પાસે ${userAppointments.length} ગાઈડ બુકિંગ છે` : (language === 'hi' ? `आपके पास ${userAppointments.length} गाइड बुकिंग है` : `You have ${userAppointments.length} guide bookings`)}
+                        {language === 'gu' ? `તમારી પાસે ${userAppointments.length} ગાઈડ બુકિંગ છે` : (language === 'hi' ? `आपके पास ${userAppointments.length} ગાઈડ બુકિંગ છે` : `You have ${userAppointments.length} guide bookings`)}
                     </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color="#2196F3" />
@@ -3001,22 +3576,22 @@ export default function App() {
 
       {/* CUSTOM SIDE MENU MODAL */}
       <Modal
-        animationType="fade"
+        animationType="slide"
         transparent={false}
         visible={isMenuVisible}
         onRequestClose={() => setIsMenuVisible(false)}
       >
         <StatusBar style="light" />
-        <View style={[styles.menuContainer, { width: '100%', height: '100%' }]}>
-                <LinearGradient colors={['#FF9933', '#FF512F']} style={styles.menuHeader}>
+        <View style={{ flex: 1, backgroundColor: '#fff' }}>
+                <LinearGradient colors={['#FF9933', '#FF512F']} style={{ padding: 25, paddingTop: Platform.OS === 'android' ? 50 : 60, paddingBottom: 20 }}>
                     <TouchableOpacity 
-                        style={{ position: 'absolute', top: 40, right: 20, zIndex: 10 }}
+                        style={{ position: 'absolute', top: Platform.OS === 'android' ? 45 : 55, right: 20, zIndex: 10 }}
                         onPress={() => setIsMenuVisible(false)}
                     >
                         <Ionicons name="close" size={30} color="#fff" />
                     </TouchableOpacity>
-                    <Text style={styles.menuHeaderTitle}>Divya Darshan</Text>
-                    <Text style={styles.menuHeaderSubtitle}>{user ? `Hi, ${user.name}` : "Welcome, Devotee"}</Text>
+                    <Text style={{ color: '#fff', fontSize: 24, fontWeight: 'bold' }}>Divya Darshan</Text>
+                    <Text style={{ color: '#FFE0B2', fontSize: 14, marginTop: 5 }}>{user ? `Hi, ${user.name}` : "Welcome, Devotee"}</Text>
                 </LinearGradient>
                 
                 <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
@@ -3024,6 +3599,31 @@ export default function App() {
                         <TouchableOpacity style={styles.menuItem} onPress={handleProfilePress}>
                             <Text style={styles.menuIcon}>👤</Text>
                             <Text style={styles.menuLabel}>{getTranslation('myProfile', language)}</Text>
+                        </TouchableOpacity>
+
+                        {/* AI Scanner Button - Positioned above Spiritual Journey */}
+                        <TouchableOpacity 
+                            style={[styles.menuItem, {backgroundColor: '#FFF3E0', borderRadius: 12, marginVertical: 5, padding: 12, borderWidth: 1, borderColor: '#FFE0B2'}]} 
+                            onPress={() => { 
+                                setIsMenuVisible(false); 
+                                Alert.alert(
+                                    language === 'gu' ? 'સ્થળ ઓળખો (AI)' : 'Identify Landmark',
+                                    language === 'gu' ? 'ફોટો પાડો અથવા અપલોડ કરો' : 'Take a photo or upload',
+                                    [
+                                        { text: '📷 Camera', onPress: () => handlePickImageAndIdentify(true) },
+                                        { text: '🖼️ Gallery', onPress: () => handlePickImageAndIdentify(false) },
+                                        { text: 'Cancel', style: 'cancel' }
+                                    ]
+                                );
+                            }}
+                        >
+                            <Text style={styles.menuIcon}>🔍</Text>
+                            <View style={{flex: 1}}>
+                                <Text style={[styles.menuLabel, {color: '#E65100', fontWeight: 'bold'}]}>
+                                    {language === 'gu' ? 'સ્થળ ઓળખો (AI Scan)' : 'Identify Landmark (AI Scan)'}
+                                </Text>
+                            </View>
+                            <Ionicons name="sparkles" size={16} color="#E65100" />
                         </TouchableOpacity>
 
                         <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); setIsJourneyVisible(true); }}>
@@ -3047,9 +3647,9 @@ export default function App() {
                             <Text style={styles.menuLabel}>{getTranslation('donation', language)}</Text>
                         </TouchableOpacity>
                         
-                        <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); setIsSuggestionVisible(true); }}>
-                            <Text style={styles.menuIcon}>💡</Text>
-                            <Text style={styles.menuLabel}>{getTranslation('suggestions', language)}</Text>
+                        <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); setIsActiveStoriesVisible(true); }}>
+                            <Text style={styles.menuIcon}>📸</Text>
+                            <Text style={styles.menuLabel}>{language === 'gu' ? 'દિવ્ય વાર્તાઓ' : (language === 'hi' ? 'દિવ્ય કહાનિયાં' : 'Divine Stories')}</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity style={styles.menuItem} onPress={() => { setIsMenuVisible(false); setGuideFormData({...guideFormData, name: user?.name || '', contact: user?.contact || ''}); setIsGuideRegVisible(true); }}>
@@ -3385,7 +3985,33 @@ export default function App() {
                                 {guideDistrictList.map((g, idx) => (
                                         <View key={idx} style={styles.premiumGuideItem}>
                                             <View style={styles.guideItemTop}>
-                                                <View style={styles.guideAvatarWrapper}>
+                                                <TouchableOpacity 
+                                                    style={styles.guideAvatarWrapper}
+                                                    onPress={() => {
+                                                        // Check if guide has stories
+                                                        const guideStories = activeStories.find(s => s.guideContact === g.contact);
+                                                        if (guideStories) {
+                                                            openGuideStories(guideStories);
+                                                        }
+                                                    }}
+                                                >
+                                                    {/* Story Ring */}
+                                                    {activeStories.some(s => s.guideContact === g.contact) && (
+                                                        <LinearGradient
+                                                            colors={['#FF9933', '#8B5CF6', '#FF512F']}
+                                                            start={{x: 0, y: 0}}
+                                                            end={{x: 1, y: 1}}
+                                                            style={{
+                                                                position: 'absolute',
+                                                                top: -3,
+                                                                left: -3,
+                                                                right: -3,
+                                                                bottom: -3,
+                                                                borderRadius: 25,
+                                                                zIndex: 0
+                                                            }}
+                                                        />
+                                                    )}
                                                     <LinearGradient 
                                                         colors={['#f1f5f9', '#e2e8f0']} 
                                                         style={styles.guideAvatarGradient}
@@ -3397,7 +4023,7 @@ export default function App() {
                                                             <Text style={{fontSize: 9, color: '#fff', fontWeight: 'bold'}}>✓</Text>
                                                         </View>
                                                     )}
-                                                </View>
+                                                </TouchableOpacity>
 
                                                 <View style={styles.guideMainInfo}>
                                                     <View style={{flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between'}}>
@@ -3724,6 +4350,575 @@ export default function App() {
                     <Text style={styles.bookingSecureNote}>🙏 તમારો પ્રતિસાદ અમારા માટે મહત્વનો છે</Text>
                 </View>
             </View>
+        </View>
+      </Modal>
+
+      {/* --- In-App Chat Modal --- */}
+      <Modal 
+          animationType="slide" 
+          visible={isChatVisible} 
+          onRequestClose={() => setIsChatVisible(false)}
+      >
+          <View style={{flex: 1, backgroundColor: '#f8fafc', paddingTop: Platform.OS === 'android' ? 25 : 0}}>
+              <View style={{flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e2e8f0', elevation: 2}}>
+                  <TouchableOpacity onPress={() => setIsChatVisible(false)} style={{padding: 5}}>
+                      <Ionicons name="arrow-back" size={24} color="#0f172a" />
+                  </TouchableOpacity>
+                  <View style={{marginLeft: 15}}>
+                      <Text style={{fontSize: 16, fontWeight: 'bold'}}>{chatReceiver?.name || 'Chat'}</Text>
+                      <Text style={{fontSize: 12, color: '#64748b'}}>Secure & Private 🔒 (End-to-End)</Text>
+                  </View>
+              </View>
+
+              <ScrollView 
+                  style={{flex: 1, padding: 15}}
+                  ref={ref => { if(ref) ref.scrollToEnd({animated: true}); }}
+                  onContentSizeChange={(w, h) => { this.scrollView?.scrollToEnd({animated: true}) }}
+              >
+                  {chatMessages.length === 0 ? (
+                      <View style={{alignItems: 'center', marginTop: 50}}>
+                        <Ionicons name="chatbubbles-outline" size={48} color="#cbd5e1" />
+                        <Text style={{color: '#94a3b8', marginTop: 10}}>Start a secure conversation...</Text>
+                      </View>
+                  ) : (
+                      chatMessages.map((msg, idx) => {
+                          const isMe = msg.senderContact === user?.contact;
+                          return (
+                              <View key={idx} style={{
+                                  alignSelf: isMe ? 'flex-end' : 'flex-start',
+                                  backgroundColor: isMe ? '#0c4a6e' : '#fff',
+                                  padding: 10, borderRadius: 10, marginBottom: 8,
+                                  maxWidth: '80%', elevation: 1
+                              }}>
+                                  <Text style={{color: isMe ? '#fff' : '#000'}}>{msg.text}</Text>
+                                  <Text style={{fontSize: 10, color: isMe ? '#ccc' : '#888', textAlign: 'right', marginTop: 2}}>
+                                    {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}
+                                  </Text>
+                              </View>
+                          );
+                      })
+                  )}
+              </ScrollView>
+
+              <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+                  <View style={{flexDirection: 'row', padding: 10, borderTopWidth: 1, borderColor: '#eee', backgroundColor: '#fff'}}>
+                      <TextInput 
+                          style={{flex: 1, backgroundColor: '#f1f5f9', borderRadius: 20, paddingHorizontal: 15, height: 40}}
+                          placeholder="Type a message..."
+                          value={chatInput}
+                          onChangeText={setChatInput}
+                      />
+                      <TouchableOpacity onPress={handleSendMessage} style={{marginLeft: 10, justifyContent: 'center'}}>
+                          <Ionicons name="send" size={24} color="#0c4a6e" />
+                      </TouchableOpacity>
+                  </View>
+              </KeyboardAvoidingView>
+          </View>
+      </Modal>
+
+      {/* Cancellation Reason Modal */}
+      <Modal
+          animationType="fade"
+          transparent={true}
+          visible={isCancelModalVisible}
+          onRequestClose={() => setIsCancelModalVisible(false)}
+      >
+          <View style={{flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20}}>
+              <View style={{backgroundColor: '#fff', borderRadius: 15, padding: 20}}>
+                  <Text style={{fontSize: 18, fontWeight: 'bold', marginBottom: 15}}>Cancel Booking ❌</Text>
+                  <Text style={{marginBottom: 10, color: '#555'}}>Please provide a reason for cancellation:</Text>
+                  
+                  <TextInput 
+                      style={{borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 10, minHeight: 80, textAlignVertical: 'top', marginBottom: 15}}
+                      multiline
+                      placeholder="e.g. Change of plans..."
+                      value={cancelReasonText}
+                      onChangeText={setCancelReasonText}
+                  />
+                  
+                  <View style={{flexDirection: 'row', justifyContent: 'flex-end'}}>
+                      <TouchableOpacity onPress={() => setIsCancelModalVisible(false)} style={{marginRight: 15, padding: 10}}>
+                          <Text style={{color: '#666'}}>Keep Booking</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={handleSubmitCancel} style={{backgroundColor: '#ef4444', padding: 10, borderRadius: 8}}>
+                          <Text style={{color: '#fff', fontWeight: 'bold'}}>Confirm Cancel</Text>
+                      </TouchableOpacity>
+                  </View>
+              </View>
+          </View>
+      </Modal>
+
+      {/* AI Landmark Scanner Result Modal */}
+      <Modal
+          animationType="slide"
+          visible={isScannerVisible}
+          onRequestClose={() => setIsScannerVisible(false)}
+      >
+          <View style={{flex: 1, backgroundColor: '#fff', paddingTop: Platform.OS === 'android' ? 30 : 50}}>
+              <LinearGradient colors={['#FF9933', '#FF512F']} style={{padding: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'}}>
+                  <Text style={{color: '#fff', fontSize: 20, fontWeight: 'bold'}}>
+                      {language === 'gu' ? 'સ્થળ ઓળખ (AI Scan)' : 'Landmark AI Insight'}
+                  </Text>
+                  <TouchableOpacity onPress={() => setIsScannerVisible(false)}>
+                      <Ionicons name="close-circle" size={30} color="#fff" />
+                  </TouchableOpacity>
+              </LinearGradient>
+
+              <ScrollView contentContainerStyle={{padding: 20}}>
+                  {scannedImage && (
+                      <View style={{width: '100%', height: 250, borderRadius: 15, overflow: 'hidden', marginBottom: 20, elevation: 5}}>
+                          <Image source={{uri: scannedImage}} style={{width: '100%', height: '100%'}} resizeMode="cover" />
+                      </View>
+                  )}
+
+                  {isScanning ? (
+                      <View style={{alignItems: 'center', padding: 40}}>
+                          <ActivityIndicator size="large" color="#FF9933" />
+                          <Text style={{marginTop: 15, fontSize: 16, color: '#666', fontWeight: 'bold'}}>
+                              {language === 'gu' ? 'AI ફોટાનું નિરીક્ષણ કરી રહ્યું છે...' : 'AI is analyzing the photo...'}
+                          </Text>
+                      </View>
+                  ) : (
+                      <View style={{backgroundColor: '#f8fafc', padding: 20, borderRadius: 15, borderWidth: 1, borderColor: '#e2e8f0'}}>
+                          <Text style={{fontSize: 16, lineHeight: 24, color: '#1e293b'}}>
+                              {scanResult || (language === 'gu' ? 'કોઈ ડેટા મળ્યો નથી.' : 'No details found.')}
+                          </Text>
+                      </View>
+                  )}
+                  
+                  {scanResult && !isScanning && (
+                      <TouchableOpacity 
+                        style={{
+                            marginTop: 20, 
+                            backgroundColor: '#10b981', 
+                            padding: 16, 
+                            borderRadius: 12, 
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            elevation: 3,
+                            shadowColor: '#10b981',
+                            shadowOffset: { width: 0, height: 4 },
+                            shadowOpacity: 0.3,
+                            shadowRadius: 8
+                        }}
+                        onPress={() => {
+                            // Extract place name from scan result (first line usually)
+                            const lines = scanResult.split('\n').filter(l => l.trim());
+                            const placeName = lines[0]?.replace(/🛕|📍|✨|🏛️/g, '').trim() || 'this place';
+                            handleGetDetailedInfo(placeName);
+                        }}
+                      >
+                        <Ionicons name="information-circle" size={24} color="#fff" style={{marginRight: 8}} />
+                        <Text style={{color: '#fff', fontWeight: 'bold', fontSize: 17}}>
+                            {language === 'gu' ? '📖 વધુ માહિતી મેળવો' : language === 'hi' ? '📖 अधिक जानकारी प्राप्त करें' : '📖 Get More Info'}
+                        </Text>
+                      </TouchableOpacity>
+                  )}
+                  
+                  <TouchableOpacity 
+                    style={{marginTop: 15, backgroundColor: '#FF9933', padding: 15, borderRadius: 10, alignItems: 'center'}}
+                    onPress={() => setIsScannerVisible(false)}
+                  >
+                    <Text style={{color: '#fff', fontWeight: 'bold', fontSize: 16}}>
+                        {language === 'gu' ? 'બરાબર છે' : 'Understood'}
+                    </Text>
+                  </TouchableOpacity>
+              </ScrollView>
+          </View>
+      </Modal>
+
+      {/* Detailed Information Modal */}
+      <Modal
+          animationType="slide"
+          visible={isDetailedInfoVisible}
+          onRequestClose={() => setIsDetailedInfoVisible(false)}
+      >
+          <View style={{flex: 1, backgroundColor: '#fff', paddingTop: Platform.OS === 'android' ? 30 : 50}}>
+              <LinearGradient colors={['#10b981', '#059669']} style={{padding: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'}}>
+                  <View style={{flex: 1}}>
+                      <Text style={{color: '#fff', fontSize: 20, fontWeight: 'bold'}}>
+                          {language === 'gu' ? '📚 સંપૂર્ણ માહિતી' : language === 'hi' ? '📚 पूर्ण जानकारी' : '📚 Complete Guide'}
+                      </Text>
+                      <Text style={{color: '#d1fae5', fontSize: 12, marginTop: 4}}>
+                          {language === 'gu' ? 'ટુરિસ્ટ ગાઇડ જેવી વિગતવાર માહિતી' : language === 'hi' ? 'पर्यटक गाइड जैसी विस्तृत जानकारी' : 'Tourist Guide Level Details'}
+                      </Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setIsDetailedInfoVisible(false)}>
+                      <Ionicons name="close-circle" size={30} color="#fff" />
+                  </TouchableOpacity>
+              </LinearGradient>
+
+              <ScrollView contentContainerStyle={{padding: 20}}>
+                  {isLoadingDetailedInfo ? (
+                      <View style={{alignItems: 'center', padding: 60}}>
+                          <ActivityIndicator size="large" color="#10b981" />
+                          <Text style={{marginTop: 20, fontSize: 16, color: '#666', fontWeight: 'bold', textAlign: 'center'}}>
+                              {language === 'gu' ? 'વિગતવાર માહિતી તૈયાર કરી રહ્યા છીએ...\n\nકૃપા કરીને રાહ જુઓ' : 
+                               language === 'hi' ? 'विस्तृत जानकारी तैयार कर रहे हैं...\n\nकृपया प्रतीक्षा करें' : 
+                               'Preparing detailed information...\n\nPlease wait'}
+                          </Text>
+                      </View>
+                  ) : detailedInfo ? (
+                      <>
+                          {/* Detailed Information Content */}
+                          <View style={{backgroundColor: '#f0fdf4', padding: 20, borderRadius: 15, borderWidth: 2, borderColor: '#10b981'}}>
+                              <Text style={{fontSize: 15, lineHeight: 26, color: '#1e293b'}}>
+                                  {detailedInfo}
+                              </Text>
+                          </View>
+                      </>
+                  ) : (
+                      <View style={{alignItems: 'center', padding: 40}}>
+                          <Ionicons name="alert-circle-outline" size={60} color="#94a3b8" />
+                          <Text style={{marginTop: 15, fontSize: 16, color: '#64748b', textAlign: 'center'}}>
+                              {language === 'gu' ? 'માહિતી મળી નથી' : language === 'hi' ? 'जानकारी नहीं मिली' : 'No information available'}
+                          </Text>
+                      </View>
+                  )}
+                  
+                  <TouchableOpacity 
+                    style={{marginTop: 20, backgroundColor: '#10b981', padding: 15, borderRadius: 10, alignItems: 'center'}}
+                    onPress={() => setIsDetailedInfoVisible(false)}
+                  >
+                    <Text style={{color: '#fff', fontWeight: 'bold', fontSize: 16}}>
+                        {language === 'gu' ? 'બંધ કરો' : language === 'hi' ? 'बंद करें' : 'Close'}
+                    </Text>
+                  </TouchableOpacity>
+              </ScrollView>
+          </View>
+      </Modal>
+
+      {/* STORY VIEWER MODAL */}
+      <Modal
+        animationType="fade"
+        transparent={false}
+        visible={isStoriesVisible}
+        onRequestClose={() => setIsStoriesVisible(false)}
+      >
+        <View style={{flex: 1, backgroundColor: '#000'}}>
+          {selectedGuideStories && selectedGuideStories.stories && selectedGuideStories.stories[currentStoryIndex] ? (
+            <>
+              {/* Story Image */}
+              <Image 
+                source={{ uri: selectedGuideStories.stories[currentStoryIndex].mediaUrl }}
+                style={{width: '100%', height: '100%'}}
+                resizeMode="contain"
+              />
+
+              {/* Top Gradient Overlay with Guide Info */}
+              <LinearGradient
+                colors={['rgba(0,0,0,0.7)', 'transparent']}
+                style={{position: 'absolute', top: 0, left: 0, right: 0, paddingTop: 50, paddingHorizontal: 20, paddingBottom: 30}}
+              >
+                {/* Progress Bars */}
+                <View style={{flexDirection: 'row', marginBottom: 15}}>
+                  {selectedGuideStories.stories.map((_, index) => (
+                    <View 
+                      key={index}
+                      style={{
+                        flex: 1,
+                        height: 3,
+                        backgroundColor: 'rgba(255,255,255,0.3)',
+                        marginHorizontal: 2,
+                        borderRadius: 2,
+                        overflow: 'hidden'
+                      }}
+                    >
+                      {index < currentStoryIndex && (
+                        <View style={{width: '100%', height: '100%', backgroundColor: '#fff'}} />
+                      )}
+                      {index === currentStoryIndex && (
+                        <View style={{width: '100%', height: '100%', backgroundColor: '#fff'}} />
+                      )}
+                    </View>
+                  ))}
+                </View>
+
+                {/* Guide Header */}
+                <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'}}>
+                  <View style={{flexDirection: 'row', alignItems: 'center', flex: 1}}>
+                    <View style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 20,
+                      backgroundColor: '#FF9933',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      marginRight: 12
+                    }}>
+                      <Text style={{color: '#fff', fontWeight: 'bold', fontSize: 18}}>
+                        {selectedGuideStories.guideName?.charAt(0)}
+                      </Text>
+                    </View>
+                    <View style={{flex: 1}}>
+                      <Text style={{color: '#fff', fontSize: 16, fontWeight: 'bold'}}>
+                        {selectedGuideStories.guideName}
+                      </Text>
+                      <Text style={{color: '#ddd', fontSize: 12}}>
+                        {Math.floor((new Date() - new Date(selectedGuideStories.stories[currentStoryIndex].createdAt)) / 3600000)}h ago
+                      </Text>
+                    </View>
+                  </View>
+                  <TouchableOpacity onPress={() => setIsStoriesVisible(false)}>
+                    <Ionicons name="close" size={28} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              </LinearGradient>
+
+              {/* Bottom Gradient with Caption and Actions */}
+              <LinearGradient
+                colors={['transparent', 'rgba(0,0,0,0.8)']}
+                style={{position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 20, paddingTop: 40, paddingBottom: 40}}
+              >
+                {/* View Count */}
+                <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 10}}>
+                  <Ionicons name="eye" size={16} color="#fff" />
+                  <Text style={{color: '#fff', marginLeft: 6, fontSize: 14}}>
+                    {selectedGuideStories.stories[currentStoryIndex].viewCount} views
+                  </Text>
+                </View>
+
+                {/* Caption */}
+{selectedGuideStories.stories[currentStoryIndex].caption ? (
+                  <View>
+                    <Text style={{color: '#fff', fontSize: 15, marginBottom: 5, lineHeight: 22}}>
+                      {showStoryTranslation && storyTranslationText?.caption 
+                        ? storyTranslationText.caption 
+                        : selectedGuideStories.stories[currentStoryIndex].caption}
+                    </Text>
+                    <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 15, width: '100%', flexWrap: 'wrap'}}>
+                      <TouchableOpacity onPress={() => setShowStoryTranslation(false)} style={{marginRight: 10, padding: 4}}>
+                         <Text style={{color: !showStoryTranslation ? '#FF9933' : '#9ca3af', fontSize: 12, fontWeight: 'bold'}}>Orig</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => handleTranslateStory('en')} style={{marginRight: 10, padding: 4}}>
+                         <Text style={{color: showStoryTranslation && storyTargetLang === 'en' ? '#FF9933' : '#9ca3af', fontSize: 12, fontWeight: 'bold'}}>EN</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => handleTranslateStory('hi')} style={{marginRight: 10, padding: 4}}>
+                         <Text style={{color: showStoryTranslation && storyTargetLang === 'hi' ? '#FF9933' : '#9ca3af', fontSize: 12, fontWeight: 'bold'}}>HI</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => handleTranslateStory('gu')} style={{marginRight: 10, padding: 4}}>
+                         <Text style={{color: showStoryTranslation && storyTargetLang === 'gu' ? '#FF9933' : '#9ca3af', fontSize: 12, fontWeight: 'bold'}}>GU</Text>
+                      </TouchableOpacity>
+
+                      {isTranslatingStory && <ActivityIndicator size="small" color="#FF9933" style={{marginLeft: 5}} />}
+                    </View>
+                  </View>
+                ) : null}
+                {(selectedGuideStories.stories[currentStoryIndex].location || (showStoryTranslation && storyTranslationText?.location)) ? (
+                  <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 20}}>
+                    <Ionicons name="location" size={14} color="#FF9933" />
+                    <Text style={{color: '#fff', marginLeft: 4, fontSize: 13}}>
+                      {showStoryTranslation && storyTranslationText?.location 
+                        ? storyTranslationText.location 
+                        : selectedGuideStories.stories[currentStoryIndex].location}
+                    </Text>
+                  </View>
+                ) : null}
+
+                {/* Book Guide Button */}
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: '#FF9933',
+                    paddingVertical: 14,
+                    borderRadius: 12,
+                    alignItems: 'center',
+                    flexDirection: 'row',
+                    justifyContent: 'center'
+                  }}
+                  onPress={() => {
+                    setIsStoriesVisible(false);
+                    // Find and select this guide for booking
+                    const guide = guideDistrictList.find(g => g.contact === selectedGuideStories.guideContact);
+                    if (guide) {
+                      setSelectedGuideForBooking(guide);
+                      setIsBookingModalVisible(true);
+                    }
+                  }}
+                >
+                  <Ionicons name="calendar" size={20} color="#fff" />
+                  <Text style={{color: '#fff', fontWeight: 'bold', fontSize: 16, marginLeft: 8}}>
+                    Book {selectedGuideStories.guideName}
+                  </Text>
+                </TouchableOpacity>
+              </LinearGradient>
+
+              {/* Navigation Areas */}
+              <TouchableOpacity 
+                style={{position: 'absolute', left: 0, top: 0, bottom: 0, width: '30%'}}
+                onPress={previousStory}
+                activeOpacity={1}
+              />
+              <TouchableOpacity 
+                style={{position: 'absolute', right: 0, top: 0, bottom: 0, width: '70%'}}
+                onPress={nextStory}
+                activeOpacity={1}
+              />
+            </>
+          ) : null}
+        </View>
+      </Modal>
+
+      {/* CREATE STORY MODAL (For Guides) */}
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={isCreateStoryVisible}
+        onRequestClose={() => setIsCreateStoryVisible(false)}
+      >
+        <View style={styles.fullPageContainer}>
+          <View style={[styles.bookingCard, styles.fullPageCard]}>
+            <LinearGradient 
+              colors={['#FF9933', '#FF512F']} 
+              style={styles.bookingHeader}
+            >
+              <Text style={styles.bookingTitle}>📸 Create Story</Text>
+              <TouchableOpacity onPress={() => {
+                setIsCreateStoryVisible(false);
+                setStoryImage(null);
+                setStoryCaption('');
+                setStoryLocation('');
+              }}>
+                <Text style={{color: '#fff', fontSize: 18}}>✕</Text>
+              </TouchableOpacity>
+            </LinearGradient>
+
+            <ScrollView style={styles.bookingContent}>
+              {/* Image Preview */}
+              <TouchableOpacity 
+                style={{
+                  backgroundColor: '#f1f5f9',
+                  borderRadius: 15,
+                  height: 400,
+                  marginBottom: 20,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  borderWidth: 2,
+                  borderColor: storyImage ? '#FF9933' : '#e2e8f0',
+                  borderStyle: 'dashed'
+                }}
+                onPress={handlePickStoryImage}
+              >
+                {storyImage ? (
+                  <Image 
+                    source={{ uri: storyImage.uri }}
+                    style={{width: '100%', height: '100%', borderRadius: 13}}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={{alignItems: 'center'}}>
+                    <Ionicons name="camera" size={60} color="#94a3b8" />
+                    <Text style={{color: '#64748b', marginTop: 15, fontSize: 16, fontWeight: '600'}}>
+                      Tap to add photo (Camera / Gallery)
+                    </Text>
+                    <Text style={{color: '#94a3b8', marginTop: 5, fontSize: 12}}>
+                      9:16 ratio recommended
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+
+              {/* Caption Input with Voice */}
+              <View style={styles.bookingForm}>
+                <Text style={styles.bookingLabel}>Caption (Optional) 🎤</Text>
+                <View style={{position: 'relative'}}>
+                  <TextInput 
+                    style={[styles.bookingInput, {height: 80, textAlignVertical: 'top', paddingTop: 12, paddingRight: 50}]}
+                    placeholder="Share what makes this special... (Tap mic to speak)"
+                    value={storyCaption}
+                    onChangeText={setStoryCaption}
+                    multiline={true}
+                    numberOfLines={3}
+                  />
+                  <TouchableOpacity
+                    style={{
+                      position: 'absolute',
+                      right: 10,
+                      top: 10,
+                      backgroundColor: '#8B5CF6',
+                      width: 36,
+                      height: 36,
+                      borderRadius: 18,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      elevation: 2
+                    }}
+                    onPress={() => {
+                      Alert.alert(
+                        "🎤 Voice Input",
+                        "Use your keyboard's microphone button to speak!\n\nOn most keyboards:\n• Tap the text field\n• Look for 🎤 icon on keyboard\n• Speak your caption\n\nNote: Voice typing works through your device keyboard (Gboard, SwiftKey, etc.)",
+                        [{ text: "Got it!" }]
+                      );
+                    }}
+                  >
+                    <Ionicons name="mic" size={20} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+                <Text style={{fontSize: 11, color: '#64748b', marginTop: 5}}>
+                  💡 Tip: Use your keyboard's mic button for voice typing
+                </Text>
+              </View>
+
+              {/* Location Input with Voice */}
+              <View style={styles.bookingForm}>
+                <Text style={styles.bookingLabel}>Location (Optional) 🎤</Text>
+                <View style={{position: 'relative'}}>
+                  <TextInput 
+                    style={[styles.bookingInput, {paddingRight: 50}]}
+                    placeholder="e.g., Somnath Temple (Tap mic to speak)"
+                    value={storyLocation}
+                    onChangeText={setStoryLocation}
+                  />
+                  <TouchableOpacity
+                    style={{
+                      position: 'absolute',
+                      right: 10,
+                      top: 12,
+                      backgroundColor: '#8B5CF6',
+                      width: 36,
+                      height: 36,
+                      borderRadius: 18,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      elevation: 2
+                    }}
+                    onPress={() => {
+                      Alert.alert(
+                        "🎤 Voice Input",
+                        "Use your keyboard's microphone button to speak!\n\nOn most keyboards:\n• Tap the text field\n• Look for 🎤 icon on keyboard\n• Speak the location\n\nNote: Voice typing works through your device keyboard.",
+                        [{ text: "Got it!" }]
+                      );
+                    }}
+                  >
+                    <Ionicons name="mic" size={20} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Info Note */}
+              <View style={{backgroundColor: '#fef3c7', padding: 12, borderRadius: 10, marginBottom: 20}}>
+                <Text style={{color: '#92400e', fontSize: 12, lineHeight: 18}}>
+                  ⏰ Visible for 24 hours. You can select MULTIPLE photos! 📸
+                </Text>
+              </View>
+
+              {/* Upload Button */}
+              <TouchableOpacity 
+                style={[styles.confirmBookingBtn, (!storyImage || isUploadingStory) && {opacity: 0.5}]}
+                onPress={handleCreateStory}
+                disabled={!storyImage || isUploadingStory}
+              >
+                {isUploadingStory ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                    <Ionicons name="cloud-upload" size={20} color="#fff" />
+                    <Text style={[styles.confirmBookingText, {marginLeft: 8}]}>Post Story</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
         </View>
       </Modal>
 
@@ -4997,6 +6192,25 @@ export default function App() {
                                 )}
                             </View>
 
+                            {/* Create Story Button */}
+                            <TouchableOpacity 
+                                style={{ 
+                                    backgroundColor: '#8B5CF6', 
+                                    padding: 12, 
+                                    borderRadius: 10, 
+                                    alignItems: 'center',
+                                    marginBottom: 10,
+                                    flexDirection: 'row',
+                                    justifyContent: 'center'
+                                }} 
+                                onPress={() => setIsCreateStoryVisible(true)}
+                            >
+                                <Ionicons name="camera" size={20} color="#fff" />
+                                <Text style={{ color: '#fff', fontWeight: 'bold', marginLeft: 8 }}>
+                                    Create Story (24h)
+                                </Text>
+                            </TouchableOpacity>
+
                             <TouchableOpacity 
                                 style={{ backgroundColor: '#FF9933', padding: 12, borderRadius: 10, alignItems: 'center' }} 
                                 onPress={() => setIsAppointmentsVisible(true)}
@@ -5501,10 +6715,6 @@ const styles = StyleSheet.create({
   suggestionActionBtn: { backgroundColor: '#e0f2fe', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#bae6fd' },
   suggestionActionText: { color: '#0369a1', fontSize: 11, fontWeight: 'bold' },
   
-  audioBtn: { marginTop: 10, borderRadius: 12, overflow: 'hidden', elevation: 3, width: 140 },
-  audioBtnActive: { elevation: 1 },
-  audioGradient: { paddingVertical: 8, paddingHorizontal: 12, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
-  audioBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
 
   ratingListItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 18, borderRadius: 20, marginBottom: 12, elevation: 2 },
   adminRatingInfo: { flex: 1 },

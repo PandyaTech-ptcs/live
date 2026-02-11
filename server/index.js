@@ -13,6 +13,19 @@ const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { Upload } = require('@aws-sdk/lib-storage');
 
 const app = express();
+const http = require('http');
+const socketIo = require('socket.io');
+
+const server = http.createServer(app);
+const io = new socketIo.Server(server, { cors: { origin: "*" } });
+global.io = io; // Make accessible to routes
+
+io.on('connection', (socket) => {
+    socket.on('join', (userId) => {
+        socket.join(userId);
+       // console.log(`User ${userId} joined socket room`);
+    });
+});
 const port = process.env.PORT || 3000;
 
 app.use(cors());
@@ -134,6 +147,7 @@ const Appointment = sequelize.define('Appointment', {
     isPaidToAdmin: { type: DataTypes.BOOLEAN, defaultValue: false }, // User paid admin?
     commissionAmount: { type: DataTypes.INTEGER, defaultValue: 0 },
     adminCommissionStatus: { type: DataTypes.STRING, defaultValue: 'pending' }, 
+    cancellationReason: { type: DataTypes.STRING }, // Reason for cancellation 
     bookedAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
 });
 
@@ -205,6 +219,36 @@ const GuideReview = sequelize.define('GuideReview', {
     rating: { type: DataTypes.INTEGER, allowNull: false }, // 1-5 stars
     comment: { type: DataTypes.TEXT },
     createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+});
+
+// --- Chat Message Model ---
+const Message = sequelize.define('Message', {
+    senderContact: { type: DataTypes.STRING, allowNull: false },
+    receiverContact: { type: DataTypes.STRING, allowNull: false },
+    text: { type: DataTypes.TEXT, allowNull: false },
+    isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
+    timestamp: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+});
+
+// --- Guide Story Model ---
+const GuideStory = sequelize.define('GuideStory', {
+    guideContact: { type: DataTypes.STRING, allowNull: false },
+    guideName: { type: DataTypes.STRING },
+    mediaUrl: { type: DataTypes.STRING, allowNull: false }, // Image or video URL
+    mediaType: { type: DataTypes.STRING, defaultValue: 'image' }, // 'image' or 'video'
+    caption: { type: DataTypes.TEXT }, // Optional caption
+    location: { type: DataTypes.STRING }, // Optional location tag
+    viewCount: { type: DataTypes.INTEGER, defaultValue: 0 },
+    expiresAt: { type: DataTypes.DATE, allowNull: false }, // 24 hours from creation
+    createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+});
+
+// --- Story View Model (Track who viewed which story) ---
+const StoryView = sequelize.define('StoryView', {
+    storyId: { type: DataTypes.INTEGER, allowNull: false },
+    viewerContact: { type: DataTypes.STRING, allowNull: false },
+    viewerName: { type: DataTypes.STRING },
+    viewedAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
 });
 
 // --- Initial Data for Seeding ---
@@ -997,7 +1041,7 @@ app.get('/api/appointments/guide/:contact', async (req, res) => {
 // API: Accept/Reject Appointment
 app.post('/api/appointments/update-status', async (req, res) => {
     try {
-        const { id, status } = req.body;
+        const { id, status, reason } = req.body;
         if (!id || !status) {
             return res.status(400).json({ error: "Booking ID and status required" });
         }
@@ -1007,7 +1051,36 @@ app.post('/api/appointments/update-status', async (req, res) => {
             return res.status(404).json({ error: "Appointment not found" });
         }
 
-        await appointment.update({ status });
+        await appointment.update({ 
+            status,
+            cancellationReason: reason 
+        });
+
+        // --- Notification Logic ---
+        if(global.io) {
+            if(status === 'rejected') {
+                // Guide rejected -> Notify User
+                global.io.to(appointment.userContact).emit('notification', {
+                    title: "Booking Update ⚠️",
+                    body: `Guide ${appointment.guideName || 'User'} is not available. Please try another guide.`,
+                    type: 'rejected'
+                });
+            } else if(status === 'cancelled') {
+                // User cancelled -> Notify Guide
+                global.io.to(appointment.guideContact).emit('notification', {
+                    title: "Booking Cancelled ❌",
+                    body: `Appointment with ${appointment.userName} on ${appointment.date} has been CANCELLED.\nReason: ${reason || 'N/A'}.`,
+                    type: 'cancelled'
+                });
+            } else if(status === 'accepted') {
+                // Guide accepted -> Notify User
+                global.io.to(appointment.userContact).emit('notification', {
+                    title: "Booking Accepted! ✅",
+                    body: `Guide ${appointment.guideName} has accepted your request! Please proceed to payment.`,
+                    type: 'accepted'
+                });
+            }
+        }
         console.log(`[BOOKING] Status Updated: ${appointment.id} -> ${status}`);
         res.json({ success: true, appointment });
     } catch (error) {
@@ -1228,10 +1301,264 @@ app.get('/api/reviews/can-review/:appointmentId', async (req, res) => {
         const existingReview = await GuideReview.findOne({ where: { appointmentId: parseInt(appointmentId) } });
         res.json({ canReview: !existingReview });
     } catch (error) {
-        console.error("Check review status error:", error);
-        res.status(500).json({ error: "Failed to check review status" });
+        console.error("Can Review Error:", error);
+        res.status(500).json({ error: "Check failed" });
     }
 });
+
+/* --- SECURE COMMUNICATION APIS --- */
+app.post('/api/chat/send', async (req, res) => {
+    try {
+        const { senderContact, receiverContact, text } = req.body;
+        const msg = await Message.create({ senderContact, receiverContact, text });
+        
+        // Emit via Socket
+        if (global.io) {
+            global.io.to(receiverContact).emit('receive_message', msg);
+            global.io.to(senderContact).emit('receive_message', msg); // Optional: Confirm to sender
+        }
+        
+        res.json({ success: true, message: msg });
+    } catch (e) {
+        console.error("Chat Send Error:", e);
+        res.status(500).json({ error: "Failed to send message" });
+    }
+});
+
+app.get('/api/chat/history', async (req, res) => {
+    try {
+        const { user1, user2 } = req.query;
+        const messages = await Message.findAll({
+            where: {
+                [Op.or]: [
+                    { senderContact: user1, receiverContact: user2 },
+                    { senderContact: user2, receiverContact: user1 }
+                ]
+            },
+            order: [['createdAt', 'ASC']]
+        });
+        res.json(messages);
+    } catch (e) {
+        console.error("Chat History Error:", e);
+        res.status(500).json({ error: "Failed to fetch chat history" });
+    }
+});
+
+app.post('/api/call/secure-bridge', async (req, res) => {
+    try {
+        let { userContact, guideContact } = req.body;
+        if (!userContact || !guideContact) return res.status(400).json({ error: "Contacts required" });
+
+        // Normalize
+        if (!userContact.startsWith('+')) userContact = '+91' + userContact.replace(/\D/g, '');
+        if (!guideContact.startsWith('+')) guideContact = '+91' + guideContact.replace(/\D/g, '');
+
+        const twilioNumber = process.env.TWILIO_PHONE_NUMBER;
+        // Re-init client to be safe inside handler
+        const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
+        const response = new twilio.twiml.VoiceResponse();
+        response.say({ language: 'en-IN' }, "Connecting you to your Guide securely.");
+        const dial = response.dial({ callerId: twilioNumber });
+        dial.number(guideContact);
+
+        await client.calls.create({
+            twiml: response.toString(),
+            to: userContact,
+            from: twilioNumber
+        });
+
+        res.json({ success: true });
+    } catch (e) {
+        console.error("Secure Call Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- GUIDE STORY APIs ---
+
+// API: Create a Story (Guide uploads image/video)
+app.post('/api/stories/create', upload.single('media'), async (req, res) => {
+    try {
+        const { guideContact, guideName, caption, location, mediaType } = req.body;
+        
+        if (!guideContact || !req.file) {
+            return res.status(400).json({ error: "Guide contact and media file are required" });
+        }
+
+        // Upload to S3
+        const fileExtension = path.extname(req.file.originalname);
+        const fileName = `stories/${guideContact}_${Date.now()}${fileExtension}`;
+        
+        const uploadParams = {
+            Bucket: S3_BUCKET,
+            Key: fileName,
+            Body: req.file.buffer,
+            ContentType: req.file.mimetype,
+            ACL: 'public-read'
+        };
+
+        await s3Client.send(new PutObjectCommand(uploadParams));
+        const mediaUrl = `https://${S3_BUCKET}.s3.${process.env.AWS_REGION || 'ap-south-1'}.amazonaws.com/${fileName}`;
+
+        // Create story with 24-hour expiration
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        
+        const story = await GuideStory.create({
+            guideContact,
+            guideName,
+            mediaUrl,
+            mediaType: mediaType || 'image',
+            caption,
+            location,
+            expiresAt
+        });
+
+        console.log(`[STORY] New story created by ${guideName}: ${story.id}`);
+        res.json({ success: true, story });
+    } catch (error) {
+        console.error("Create story error:", error);
+        res.status(500).json({ error: "Failed to create story: " + error.message });
+    }
+});
+
+// API: Get All Active Stories (Not Expired)
+app.get('/api/stories/active', async (req, res) => {
+    try {
+        const stories = await GuideStory.findAll({
+            where: {
+                expiresAt: { [Op.gt]: new Date() }
+            },
+            order: [['createdAt', 'DESC']]
+        });
+
+        // Group stories by guide
+        const groupedStories = stories.reduce((acc, story) => {
+            const contact = story.guideContact;
+            if (!acc[contact]) {
+                acc[contact] = {
+                    guideContact: contact,
+                    guideName: story.guideName,
+                    stories: []
+                };
+            }
+            acc[contact].stories.push(story);
+            return acc;
+        }, {});
+
+        res.json(Object.values(groupedStories));
+    } catch (error) {
+        console.error("Fetch active stories error:", error);
+        res.status(500).json({ error: "Failed to fetch stories" });
+    }
+});
+
+// API: Get Stories for a Specific Guide
+app.get('/api/stories/guide/:contact', async (req, res) => {
+    try {
+        const { contact } = req.params;
+        const stories = await GuideStory.findAll({
+            where: {
+                guideContact: contact,
+                expiresAt: { [Op.gt]: new Date() }
+            },
+            order: [['createdAt', 'DESC']]
+        });
+        res.json(stories);
+    } catch (error) {
+        console.error("Fetch guide stories error:", error);
+        res.status(500).json({ error: "Failed to fetch guide stories" });
+    }
+});
+
+// API: Record Story View
+app.post('/api/stories/view', async (req, res) => {
+    try {
+        const { storyId, viewerContact, viewerName } = req.body;
+        
+        if (!storyId || !viewerContact) {
+            return res.status(400).json({ error: "Story ID and viewer contact are required" });
+        }
+
+        // Check if already viewed by this user
+        const existingView = await StoryView.findOne({
+            where: { storyId, viewerContact }
+        });
+
+        if (!existingView) {
+            await StoryView.create({ storyId, viewerContact, viewerName });
+            
+            // Increment view count
+            const story = await GuideStory.findByPk(storyId);
+            if (story) {
+                await story.update({ viewCount: story.viewCount + 1 });
+            }
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error("Record story view error:", error);
+        res.status(500).json({ error: "Failed to record view" });
+    }
+});
+
+// API: Get Story Views (for guide to see who viewed)
+app.get('/api/stories/:storyId/views', async (req, res) => {
+    try {
+        const { storyId } = req.params;
+        const views = await StoryView.findAll({
+            where: { storyId },
+            order: [['viewedAt', 'DESC']]
+        });
+        res.json(views);
+    } catch (error) {
+        console.error("Fetch story views error:", error);
+        res.status(500).json({ error: "Failed to fetch views" });
+    }
+});
+
+// API: Delete Story (Guide can delete their own story)
+app.delete('/api/stories/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { guideContact } = req.body;
+        
+        const story = await GuideStory.findByPk(id);
+        if (!story) {
+            return res.status(404).json({ error: "Story not found" });
+        }
+
+        if (story.guideContact !== guideContact) {
+            return res.status(403).json({ error: "Unauthorized" });
+        }
+
+        await story.destroy();
+        console.log(`[STORY] Deleted story ${id} by ${guideContact}`);
+        res.json({ success: true });
+    } catch (error) {
+        console.error("Delete story error:", error);
+        res.status(500).json({ error: "Failed to delete story" });
+    }
+});
+
+// Cleanup expired stories (run periodically)
+async function cleanupExpiredStories() {
+    try {
+        const deleted = await GuideStory.destroy({
+            where: {
+                expiresAt: { [Op.lt]: new Date() }
+            }
+        });
+        if (deleted > 0) {
+            console.log(`[CLEANUP] Deleted ${deleted} expired stories`);
+        }
+    } catch (error) {
+        console.error("Cleanup stories error:", error);
+    }
+}
+
+// Run cleanup every hour
+setInterval(cleanupExpiredStories, 60 * 60 * 1000);
 
 // --- AI Content Generation ---
 app.post('/api/admin/generate-ai-content', async (req, res) => {
@@ -1301,6 +1628,180 @@ app.post('/api/admin/generate-ai-content', async (req, res) => {
     } catch (error) {
         console.error("Gemini Gen Error:", error);
         res.status(500).json({ error: "Gemini Generation failed: " + error.message });
+    }
+});
+
+// POST: Analyze Image (Landmark Recognition)
+app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: "No image provided" });
+
+        const { language = 'gu' } = req.body; // Get language from request body, default to Gujarati
+        
+        const { GoogleGenerativeAI } = require("@google/generative-ai");
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+
+        const base64Image = req.file.buffer.toString('base64');
+        const mimeType = req.file.mimetype;
+
+        // Determine language name for prompt
+        const languageMap = {
+            'gu': 'Gujarati (ગુજરાતી)',
+            'hi': 'Hindi (हिंदी)',
+            'en': 'English'
+        };
+        const targetLanguage = languageMap[language] || languageMap['gu'];
+
+        const prompt = `Identify this temple, religious landmark, or historical place. 
+        Provide a detailed response ONLY in ${targetLanguage}. 
+        Include:
+        1. 🛕 Name of the place
+        2. 📍 Location
+        3. 📜 Historical Significance
+        4. 🏛️ Architectural Style
+        5. 🌸 Best time to visit
+        6. ✨ Special features or interesting facts
+        
+        Use emojis and make it look premium and engaging. 
+        If the image is not a landmark, politely inform the user in ${targetLanguage}.`;
+
+        const result = await model.generateContent([
+            {
+                inlineData: {
+                    data: base64Image,
+                    mimeType: mimeType
+                }
+            },
+            prompt
+        ]);
+
+        const responseText = result.response.text();
+        console.log(`[AI SCAN] Image analyzed in ${language}`);
+        res.json({ success: true, analysis: responseText });
+    } catch (error) {
+        console.error("Image Analysis Error:", error);
+        const errorMessages = {
+            'gu': 'નિદાન નિષ્ફળ ગયું: ',
+            'hi': 'विश्लेषण विफल रहा: ',
+            'en': 'Analysis failed: '
+        };
+        const errorMsg = errorMessages[req.body.language || 'gu'] || errorMessages['gu'];
+        res.status(500).json({ error: errorMsg + error.message });
+    }
+});
+
+// POST: Get Detailed Information about Scanned Landmark
+app.post('/api/analyze-image/detailed', async (req, res) => {
+    try {
+        const { placeName, language = 'gu' } = req.body;
+        
+        if (!placeName) {
+            return res.status(400).json({ error: "Place name is required" });
+        }
+
+        const { GoogleGenerativeAI } = require("@google/generative-ai");
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+
+        // Determine language name for prompt
+        const languageMap = {
+            'gu': 'Gujarati (ગુજરાતી)',
+            'hi': 'Hindi (हिंदी)',
+            'en': 'English'
+        };
+        const targetLanguage = languageMap[language] || languageMap['gu'];
+
+        const prompt = `Act as an Expert Tourist Guide. Provide COMPREHENSIVE and DETAILED information about "${placeName}" ONLY in ${targetLanguage}.
+
+        Structure your response with these sections (use emojis):
+
+        🛕 **સ્થળનું નામ / Name**
+        Full name of the place
+
+        📍 **સ્થાન / Location**
+        Exact location, district, state, and how to reach
+
+        📜 **ઈતિહાસ અને કથા / History & Story**
+        - Complete historical background
+        - Legends and mythological stories
+        - When was it built and by whom
+        - Historical significance
+        - Famous events associated with it
+        (Write at least 200 words)
+
+        🏛️ **સ્થાપત્ય કલા / Architecture**
+        - Architectural style and features
+        - Special carvings or designs
+        - Materials used
+        - Unique structural elements
+        - What to observe while visiting
+        (Write at least 150 words)
+
+        ✨ **મહત્વ અને રહસ્યો / Significance & Secrets**
+        - Religious/spiritual significance
+        - Hidden secrets or lesser-known facts
+        - Miracles or divine experiences reported
+        - Special rituals or traditions
+        - Why this place is important
+
+        🌸 **મુલાકાત લેવાનો શ્રેષ્ઠ સમય / Best Time to Visit**
+        - Best months/seasons
+        - Special festivals or events
+        - Timing (opening/closing hours)
+        - Crowd information
+
+        🚗 **કેવી રીતે પહોંચવું / How to Reach**
+        - By road (nearest highways, bus routes)
+        - By train (nearest railway station)
+        - By air (nearest airport)
+        - Local transportation options
+
+        🏨 **રહેવાની વ્યવસ્થા / Accommodation**
+        - Nearby hotels and lodges
+        - Dharamshalas or guest houses
+        - Approximate price ranges
+
+        🍽️ **ખાસ ખોરાક / Special Food**
+        - Famous local dishes to try
+        - Recommended restaurants or food stalls
+        - Prasad or temple food (if applicable)
+
+        📸 **ફોટોગ્રાફી ટિપ્સ / Photography Tips**
+        - Best spots for photos
+        - Best time of day for photography
+        - Any restrictions
+
+        ⚠️ **મહત્વપૂર્ણ સૂચનાઓ / Important Guidelines**
+        - Dress code (if any)
+        - Things to carry
+        - What to avoid
+        - Safety tips
+        - Entry fees (if any)
+
+        🗺️ **નજીકના આકર્ષણો / Nearby Attractions**
+        - Other temples or tourist spots nearby
+        - Distance from this place
+        - Combined tour suggestions
+
+        Make it extremely detailed and informative - like a professional tourist guide would explain. Use rich language and engaging storytelling in ${targetLanguage}.`;
+
+        const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }]
+        });
+
+        const responseText = result.response.text();
+        console.log(`[AI DETAILED INFO] Generated for "${placeName}" in ${language}`);
+        res.json({ success: true, detailedInfo: responseText });
+    } catch (error) {
+        console.error("Detailed Info Error:", error);
+        const errorMessages = {
+            'gu': 'વિગતવાર માહિતી મેળવવામાં નિષ્ફળ: ',
+            'hi': 'विस्तृत जानकारी प्राप्त करने में विफल: ',
+            'en': 'Failed to get detailed information: '
+        };
+        const errorMsg = errorMessages[req.body.language || 'gu'] || errorMessages['gu'];
+        res.status(500).json({ error: errorMsg + error.message });
     }
 });
 
@@ -1821,7 +2322,7 @@ app.post('/api/admin/delete-temple', async (req, res) => {
     }
 });
 
-app.listen(port, '0.0.0.0', async () => {
+server.listen(port, '0.0.0.0', async () => {
     console.log(`\n--- Somnath Aarti Server (PostgreSQL) ---`);
     console.log(`Local: http://localhost:${port}`);
     
