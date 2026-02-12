@@ -4,6 +4,7 @@ import { StyleSheet, Text, View, ScrollView, ActivityIndicator, RefreshControl, 
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
+import * as Speech from 'expo-speech';
 
 // Set notification handler
 LogBox.ignoreAllLogs();
@@ -657,6 +658,7 @@ export default function App() {
   const [editPhone, setEditPhone] = useState(''); // Correctly added to App scope
   const [isUpdating, setIsUpdating] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   
   // Menu States
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -1085,6 +1087,21 @@ export default function App() {
       setIsDetailedInfoVisible(false);
     } finally {
       setIsLoadingDetailedInfo(false);
+    }
+  };
+
+  const handleToggleSpeech = (text) => {
+    if (isSpeaking) {
+      Speech.stop();
+      setIsSpeaking(false);
+    } else {
+      if (!text) return;
+      setIsSpeaking(true);
+      Speech.speak(text, {
+        language: language === 'gu' ? 'gu-IN' : (language === 'hi' ? 'hi-IN' : 'en-US'),
+        onDone: () => setIsSpeaking(false),
+        onError: () => setIsSpeaking(false)
+      });
     }
   };
 
@@ -3278,6 +3295,33 @@ export default function App() {
                                 ))}
                             </View>
                             <View style={styles.guideContent}>
+                                {/* Speech Toggle Button */}
+                                <TouchableOpacity 
+                                    style={{
+                                        flexDirection: 'row', 
+                                        alignItems: 'center', 
+                                        justifyContent: 'center',
+                                        backgroundColor: isSpeaking ? '#fee2e2' : '#f0f9ff',
+                                        padding: 10,
+                                        borderRadius: 12,
+                                        marginBottom: 15,
+                                        borderWidth: 1,
+                                        borderColor: isSpeaking ? '#fecaca' : '#bae6fd'
+                                    }}
+                                    onPress={() => {
+                                        const totalText = `
+                                            ${getTempleTranslation(selectedTemple, 'history', language)}. 
+                                            ${getTempleTranslation(selectedTemple, 'architecture', language)}. 
+                                            ${getTempleTranslation(selectedTemple, 'significance', language)}
+                                        `;
+                                        handleToggleSpeech(totalText);
+                                    }}
+                                >
+                                    <Ionicons name={isSpeaking ? "stop-circle" : "volume-high"} size={22} color={isSpeaking ? "#ef4444" : "#0284c7"} />
+                                    <Text style={{marginLeft: 8, fontWeight: 'bold', color: isSpeaking ? "#ef4444" : "#0284c7"}}>
+                                        {isSpeaking ? (language === 'en' ? 'Stop Listening' : 'સાંભળવાનું બંધ કરો') : (language === 'en' ? 'Listen to Guide' : 'ગાઈડ સાંભળો')}
+                                    </Text>
+                                </TouchableOpacity>
                                 {/* Global Translate Button */}
                                 {needsTranslation(selectedTemple, language) && (
                                     <TouchableOpacity 
@@ -4563,6 +4607,15 @@ export default function App() {
                       <>
                           {/* Detailed Information Content */}
                           <View style={{backgroundColor: '#f0fdf4', padding: 20, borderRadius: 15, borderWidth: 2, borderColor: '#10b981'}}>
+                              <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10}}>
+                                  <Text style={{fontWeight: 'bold', color: '#059669'}}>Description</Text>
+                                  <TouchableOpacity 
+                                      onPress={() => handleToggleSpeech(detailedInfo)}
+                                      style={{backgroundColor: isSpeaking ? '#ef4444' : '#10b981', padding: 8, borderRadius: 20}}
+                                  >
+                                      <Ionicons name={isSpeaking ? "stop-circle" : "volume-high"} size={20} color="#fff" />
+                                  </TouchableOpacity>
+                              </View>
                               <Text style={{fontSize: 15, lineHeight: 26, color: '#1e293b'}}>
                                   {detailedInfo}
                               </Text>
@@ -4702,6 +4755,13 @@ export default function App() {
                       </TouchableOpacity>
 
                       {isTranslatingStory && <ActivityIndicator size="small" color="#FF9933" style={{marginLeft: 5}} />}
+                      
+                      <TouchableOpacity 
+                        onPress={() => handleToggleSpeech(showStoryTranslation && storyTranslationText?.caption ? storyTranslationText.caption : selectedGuideStories.stories[currentStoryIndex].caption)} 
+                        style={{marginLeft: 'auto', padding: 4}}
+                      >
+                         <Ionicons name={isSpeaking ? "stop-circle" : "volume-high"} size={20} color="#FF9933" />
+                      </TouchableOpacity>
                     </View>
                   </View>
                 ) : null}
