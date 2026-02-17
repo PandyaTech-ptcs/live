@@ -73,6 +73,13 @@ app.use((req, res, next) => {
 
 // --- PostgreSQL Database Connection ---
 // --- PostgreSQL Database Connection ---
+console.log("--- DB CONNECTION DEBUG ---");
+if (process.env.DATABASE_URL) {
+    console.log("DATABASE_URL detected: " + process.env.DATABASE_URL.substring(0, 15) + "******");
+} else {
+    console.error("CRITICAL: DATABASE_URL is NOT found in environment variables!");
+}
+
 const sequelize = process.env.DATABASE_URL
     ? new Sequelize(process.env.DATABASE_URL, {
         dialect: 'postgres',
