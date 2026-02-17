@@ -72,17 +72,29 @@ app.use((req, res, next) => {
 });
 
 // --- PostgreSQL Database Connection ---
-const sequelize = new Sequelize(
-    process.env.DB_NAME || 'temple_db',
-    process.env.DB_USER || 'postgres',
-    process.env.DB_PASSWORD || 'your_password_here',
-    {
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 5432,
+// --- PostgreSQL Database Connection ---
+const sequelize = process.env.DATABASE_URL
+    ? new Sequelize(process.env.DATABASE_URL, {
         dialect: 'postgres',
-        logging: false // Toggle to true if you want to see SQL queries
-    }
-);
+        logging: false,
+        dialectOptions: {
+            ssl: {
+                require: true,
+                rejectUnauthorized: false
+            }
+        }
+    })
+    : new Sequelize(
+        process.env.DB_NAME || 'temple_db',
+        process.env.DB_USER || 'postgres',
+        process.env.DB_PASSWORD || 'your_password_here',
+        {
+            host: process.env.DB_HOST || 'localhost',
+            port: process.env.DB_PORT || 5432,
+            dialect: 'postgres',
+            logging: false
+        }
+    );
 
 // --- Temple Model Definition ---
 const Temple = sequelize.define('Temple', {
