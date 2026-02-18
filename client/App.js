@@ -30,7 +30,7 @@ Notifications.setNotificationHandler({
 
 // Bypass firewall issues by using the public tunnel URL
 // 1. USE LAN IP (Most Stable)
-const API_URL = 'https://73bd-103-105-235-239.ngrok-free.app/api/temples';
+const API_URL = 'https://live-4n0v.onrender.com/api/temples';
 
 
 

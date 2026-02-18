@@ -7,6 +7,7 @@ const twilio = require('twilio');
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcrypt');
 const multer = require('multer');
+const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
@@ -48,6 +49,7 @@ const s3Client = new S3Client({
 });
 
 const S3_BUCKET = process.env.AWS_S3_BUCKET || 'divya-darshan-temples';
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key_12345';
 
 // Configure multer for memory storage (for S3 upload)
 const upload = multer({ 
@@ -172,12 +174,17 @@ const Appointment = sequelize.define('Appointment', {
 
 // ... (Skipping intermediate lines) ...
 
-// API: Update Profile
-app.post('/api/update-profile', async (req, res) => {
+// API: Update Profile (Secured)
+app.post('/api/update-profile', authenticateToken, async (req, res) => {
     try {
         const { contact, name, phoneNumber } = req.body;
         if (!contact) {
             return res.status(400).json({ error: "Missing contact identifier" });
+        }
+
+        // Security Check: Ensure user updates their own profile
+        if (req.user.contact !== contact && req.user.role !== 'admin') {
+            return res.status(403).json({ error: "Unauthorized action." });
         }
 
         const user = await User.findOne({ where: { contact } });
@@ -470,6 +477,30 @@ const sendOtpMessage = async (contact, code) => {
     return true;
 };
 
+// --- Authentication Helper & Middleware ---
+const generateToken = (user) => {
+    return jwt.sign(
+        { id: user.id, contact: user.contact, role: user.role },
+        JWT_SECRET,
+        { expiresIn: '30d' }
+    );
+};
+
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+        return res.status(401).json({ error: "Access denied. No token provided." });
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.status(403).json({ error: "Invalid token." });
+        req.user = user;
+        next();
+    });
+};
+
 // API: Check Live Video ID for a Channel URL
 app.get('/api/live-check', (req, res) => {
     const { channelUrl } = req.query;
@@ -609,7 +640,11 @@ app.post('/api/register', async (req, res) => {
         }
 
         console.log(`[USER] Registered: ${user.name} (${user.contact}) - Guide: ${user.wantsToWorkAsGuide}`);
-        res.json({ success: true, user });
+        
+        // Generate Token
+        const token = generateToken(user);
+        
+        res.json({ success: true, user, token });
     } catch (error) {
         console.error("Registration error:", error);
         res.status(500).json({ error: "Registration failed" });
@@ -639,8 +674,11 @@ app.post('/api/login', async (req, res) => {
         // Update last login timestamp
         await user.update({ lastLogin: new Date() });
 
+        // Generate Token
+        const token = generateToken(user);
+
         console.log(`[USER] Logged in: ${user.name} (${user.contact})`);
-        res.json({ success: true, user });
+        res.json({ success: true, user, token });
     } catch (error) {
         console.error("Login error:", error);
         res.status(500).json({ error: "Login failed" });
@@ -748,27 +786,9 @@ app.post('/api/reset-password', async (req, res) => {
     }
 });
 
-// API: Update Profile
-app.post('/api/update-profile', async (req, res) => {
-    try {
-        const { contact, name } = req.body;
-        if (!contact || !name) {
-            return res.status(400).json({ error: "Missing contact or name" });
-        }
-
-        const user = await User.findOne({ where: { contact } });
-        if (!user) {
-            return res.status(404).json({ error: "User not found" });
-        }
-
-        await user.update({ name });
-        console.log(`[USER] Profile Updated: ${user.name} (${user.contact})`);
-        res.json({ success: true, user });
-    } catch (error) {
-        console.error("Update Profile error:", error);
-        res.status(500).json({ error: "Failed to update profile" });
-    }
-});
+// API: Update Profile - Removed Duplicate
+// Use the secured endpoint defined earlier
+app.delete('/api/remove-duplicate-profile-endpoint', (req, res) => res.status(410).send());
 
 // API: Rate App
 app.post('/api/rate-app', async (req, res) => {
