@@ -96,7 +96,7 @@ const AuthScreen = ({ onLogin }) => {
 
                 const data = await response.json();
                 if (data.success) {
-                    onLogin(data.user);
+                    onLogin(data.user, data.token);
                 } else {
                     Alert.alert("Login Failed", data.error || "Please try again");
                 }
@@ -217,7 +217,7 @@ const AuthScreen = ({ onLogin }) => {
 
             const data = await response.json();
             if (data.success) {
-                onLogin(data.user);
+                onLogin(data.user, data.token);
             } else {
                 Alert.alert("Registration Failed", data.error || "Please try again");
                 setAuthStep('initial'); // Reset on failure
@@ -641,6 +641,7 @@ export default function App() {
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [user, setUser] = useState(null);
+  const [authToken, setAuthToken] = useState(null);
   const [isJourneyVisible, setIsJourneyVisible] = useState(false);
   const [journeyOrigin, setJourneyOrigin] = useState('');
   const [journeyDestination, setJourneyDestination] = useState('');
@@ -1634,7 +1635,11 @@ export default function App() {
           const updateUrl = API_URL.replace('temples', 'update-profile');
           const response = await fetch(updateUrl, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+              headers: { 
+                  'Content-Type': 'application/json', 
+                  'ngrok-skip-browser-warning': 'true',
+                  'Authorization': `Bearer ${authToken}`
+              },
               body: JSON.stringify({ contact: user.contact, name: editName.trim(), phoneNumber: editPhone.trim() })
           });
 
@@ -2695,8 +2700,9 @@ export default function App() {
     }
   };
 
-  const handleLogin = (userData) => {
+  const handleLogin = (userData, token) => {
       setUser(userData);
+      if (token) setAuthToken(token);
       setIsLoggedIn(true);
   };
 
